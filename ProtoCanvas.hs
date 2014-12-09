@@ -1,5 +1,6 @@
 module Main where
 
+import Prelude hiding (lookup)
 import Graphics.Blank
 import Control.Monad.Trans
 import Control.Monad.Trans.State
@@ -68,8 +69,8 @@ pcmain state_var = do
  
 
 customDraw :: DeviceContext -> ProtoState -> Canvas ()
-customDraw context state@(ProtoState ps pid mid eMode) = do
-  let xs = [1..pid]
+customDraw context state@(ProtoState ps ms pid mid mmid fmids eMode) = do
+  let xs = keys ps --[1..pid]
       (w,h) = (width context, height context)
   clearRect (0,0,w,h)
   let (rectW, rectH) = scaler w pid
@@ -82,9 +83,14 @@ customDraw context state@(ProtoState ps pid mid eMode) = do
   --return ()
 
  where
-   f :: DeviceContext -> Double -> Double -> ProtoState -> Int -> Canvas ()
-   f c hSpace vSpace state@(ProtoState ps pid mid eMode) x = do
-     let (w, h) = (width c, height c)
+   f :: DeviceContext -> Double -> Double -> ProtoState -> String -> Canvas ()
+   f c hSpace vSpace state@(ProtoState ps ms pid mid mmid fmids eMode) n = do
+     let xPMaybe = lookup n ps
+         (x, ob) = case xPMaybe of
+           Nothing -> ((-1), [])
+           Just (Principal x'' ob'')  -> (x'', ob'')
+         --x = col p
+         (w, h) = (width c, height c)
          (rectW, rectH) = scaler w pid
 
          extra = (fromIntegral x - 1) * rectW
@@ -99,15 +105,16 @@ customDraw context state@(ProtoState ps pid mid eMode) = do
 
 
      let val = 1.04
-         principals = elems ps
+         {-principals = elems ps
          maybePrincipal :: Maybe Principal
-         maybePrincipal = Data.Map.lookup x ps
+         maybePrincipal = Data.Map.lookup x ps -}
 
-         (textString, outbox) = case maybePrincipal of
+         {-(textString, outbox) = (n,ob){-case maybePrincipal of
            Nothing -> ("", [])
-           Just (Principal name outbox) -> (name, outbox)
+           Just (Principal name outbox) -> (name, outbox) -} -}
 
-         slist = Prelude.map name principals
+         
+         slist = keys ps --Prelude.map name principals
          maxStringL = Prelude.maximum (Prelude.map Prelude.length slist)
          dMax :: Double
          dMax = fromIntegral maxStringL
@@ -122,30 +129,39 @@ customDraw context state@(ProtoState ps pid mid eMode) = do
          fontSize = pTextSizeSlider + slider +
                     ((rectH * (diff + (dMax*val))) / (dMax * dMax))
      drawText fontSize pTextColor "center" "middle" {- MiddleBaseline-}
-              (pack textString) ((rx + (rectW / 2)), (ry + (rectH / 2)))
+              (pack n{-textString-}) ((rx + (rectW / 2)), (ry + (rectH / 2)))
      --let mailbox = mailbox
-     case (Prelude.null outbox) of
+     case (Prelude.null ob{-outbox-}) of
        True -> return ()
-       False -> mapM_ (g c hSpace vSpace state x) (outbox)
+       False -> mapM_ (g c hSpace vSpace state x) (ob{-outbox-})
      return ()
      
     where g :: DeviceContext -> Double -> Double -> ProtoState ->
-               Int -> Slot -> Canvas ()
-          g c hSpace vSpace (ProtoState ps pid mid eMode) x (y,contents) = do
-            let (w,h) = (width c, height c)
+               Pos -> MessageId -> Canvas ()
+          g c hSpace vSpace (ProtoState ps ms pid mid mmid fmids eMode)
+              x y' = do
+            let yMaybe = lookup y' ms
+                (y,contents) = case yMaybe of
+                  Nothing -> ((-1), (Action ""))
+                  Just (Message y'' contents') -> (y'', contents')
+                (w,h) = (width c, height c)
                 (rectW, rectH) = scaler w pid
                 extra = (fromIntegral x - 1) * rectW
                 start@(startX, startY) =
                   ( hSpace*fromIntegral x + lrborder + (rectW/2) + extra                         ,tborder + rectH + (vSpace*fromIntegral y) )
-                maybePrincipal = Data.Map.lookup x ps
+                {-maybePrincipal = Data.Map.lookup x ps
                 principal = case maybePrincipal of
                   Nothing -> Principal "" []
                   Just p -> p
                 --mailbox = outbox principal
-                --contents = mailbox !! y
+                --contents = mailbox !! y -}
             case contents of
-              Send m toId -> do
-                let hspace = rectW + hSpace
+              Send m toN -> do
+                let pMaybe = lookup toN ps
+                    (toId, _) = case pMaybe of
+                      Nothing -> (-1, 0)
+                      Just (Principal s _) -> (s, 0)
+                    hspace = rectW + hSpace
                     delta = fromIntegral (toId - x)
                     end = (startX + hspace*delta, startY)
                     arrowSize = 10 --hardcoded for now...
@@ -154,8 +170,12 @@ customDraw context state@(ProtoState ps pid mid eMode) = do
                       False -> Main.Left
                 drawLineAndArrow (MoveTo start) end hLineSize hLineColor
                                  arrowSize arrowDir
-                let hCenter = startX + (hSpace)
-                    fontSize = (vSpace / fromIntegral pid) / fromIntegral (Prelude.length m )
+                let adjust = case arrowDir of
+                      Main.Right -> 0
+                      Main.Left -> hSpace*2
+                    hCenter = startX + (hSpace) - adjust
+                    fontSize = (vSpace / fromIntegral pid) /
+                                fromIntegral (Prelude.length m )
                 drawText fontSize mTextColor "center" "bottom" (pack m) (hCenter, startY)    
                 return ()
                

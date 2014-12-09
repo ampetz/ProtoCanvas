@@ -4,10 +4,10 @@ import Prelude hiding (lookup)
 import Graphics.Blank
 import Control.Monad.Trans
 import Control.Monad.Trans.State
-import Data.Text
+import Data.Text hiding (map,maximum,length)
 import Control.Concurrent.STM
 import Control.Concurrent
-import Data.Map
+import Data.Map hiding (map)
 import Data.String
 --import System.IO
 --import System.Directory
@@ -174,11 +174,42 @@ customDraw context state@(ProtoState ps ms pid mid mmid fmids eMode) = do
                       Main.Right -> 0
                       Main.Left -> hSpace*2
                     hCenter = startX + (hSpace) - adjust
-                    fontSize = (vSpace / fromIntegral pid) /
-                                fromIntegral (Prelude.length m )
-                drawText fontSize mTextColor "center" "bottom" (pack m) (hCenter, startY)    
+                    messages = elems ms
+                    nMes = length messages
+                    contents''' = map ProtoState.contents messages
+                    allMessageTexts = map extractText contents'''
+                    allMtLengths = map length allMessageTexts
+                    maxLen' = maximum allMtLengths
+                    maxLen = case maxLen' of
+                      1 -> 3
+                      2 -> 3
+                      _ -> maxLen'
+                    slist = allMessageTexts --keys ps --Prelude.map name principals
+                    maxStringL = maxLen --Prelude.maximum (Prelude.map Prelude.length slist)
+                    dMax :: Double
+                    dMax = fromIntegral maxStringL
+                    minStringL = Prelude.minimum (Prelude.map Prelude.length slist)
+                    dMin :: Double
+                    dMin = fromIntegral minStringL
+                    diff = (dMax - dMin)
+                    diff' = case diff == 0 of
+                      True -> dMax
+                      False -> diff
+
+                    slider = pTextSizeSliders !! (x-1)
+                    val = 1.04
+                    fontSize = pTextSizeSlider + slider +
+                          (((vSpace* (0.8)) * (diff + (dMax*val))) / (dMax * dMax))
+                    xPos = hCenter --startX + (hSpace / 2)
+                    yPos = startY --startY + (vSpace / 2)
+
+                drawText fontSize mTextColor "center" "bottom"
+                         (pack m) (xPos,yPos)  
                 return ()
-               
+                 where extractText :: Contents -> MessageText
+                       extractText contents = case contents of
+                         Send mt to -> mt
+                         Action mt -> mt
               --_ -> return ()  TODO Self-Send
 
             
@@ -238,7 +269,7 @@ drawText :: Double -> Color -> String{-TextAnchorAlignment-} ->
 drawText fontSize textColor align baseline message (x,y) =
   saveRestore $ do
     let fontString = show fontSize
-    font (pack (fontString ++ "pt Calibri"))
+    font (pack (fontString ++ "pt Courier"))
     fillStyle textColor
     textAlign (fromString align)
     textBaseline (fromString baseline)

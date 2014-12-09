@@ -1,1 +1,3 @@
-TPM,Attestation: messageeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+A to B,B: AAAAAA
+B, T: B to T
+C, T: c t

@@ -65,11 +65,59 @@ outputState = do
 pTest :: Proto ()
 pTest = do
   mds <- liftIO $ fromFile "testFile.txt"
-  --buildPrincipals mds 1
-  mc <- getMaxCol 
-  buildPrincipals mds (mc + 1)
+  buildPrincipals mds 1
+  addMessagesAt 1 mds
+  outputState
+  --liftIO $ print mds
+  --outputState
+  --removePrincipalCalled "1"
+  --removePrincipalCalled "2"
+  
+  {-state'' <- get
+  removeMessage 1
+  state <- get
+  liftIO $ print (state'' == state)
+  removeMessage 1
+  state' <- get
+  liftIO $ print (state == state')
+  pruneOutboxes
+-}
+  
+  --addMessageAt 2 (MessageD "1" "2" "1 to 2")
+  --addMessageAt 4 (MessageD "1" "2" "1 to 2")
+  --addMessageAt 1 (MessageD "1" "2" "1 to 2")
+  removeMessage 2
+  pruneOutboxes
+  --outputState
+  removePrincipalCalled "2"
+  outputState
+  addMessageAt 1 (MessageD "1" "2" "1 to 2")
+  outputState
+  buildPrincipals [(MessageD "2" "1" "2 to 1")] 3
+  addMessagesAt 1 [(MessageD "2" "1" "2 to 1")]
+  buildPrincipals [(MessageD "4" "1" "4 to 1")] 4
+  addMessagesAt 5 [(MessageD "4" "1" "4 to 1")]
   outputState
   removePrincipalCalled "1"
+  outputState
+  addMessageAt 4 (MessageD "4" "2" "4 to 2")
+  outputState
+  removePrincipalCalled "4"
+  outputState
+  removeMessage 4
+  pruneOutboxes
+  --removePrincipalCalled "3"
+  --removePrincipalCalled "2"
+  
+  --pruneOutboxes
+
+
+
+  {-mc <- getMaxCol 
+  buildPrincipals mds (mc + 1)
+  outputState
+  removePrincipalCalled "1"-}
+  
   {-newNames <- getNewNames mds
   liftIO $ mapM_ putStrLn newNames 
 
@@ -121,12 +169,34 @@ pruneOutbox ms (Principal col obIn) =
            Just mid -> mids ++ [mid]
            Nothing -> mids
 
+
+--refersTo :: Name -> Proto [Name]
+  
 removeMessage :: MessageId -> Proto ()
 removeMessage mid = do
   ms <- getMessages
-  let newMMap = M.delete mid ms
-  setMMap newMMap
-  pushFreeMid mid
+  ps <- getPrincipals
+  let maybeM = M.lookup mid ms
+  case maybeM of
+    Just(Message row (Send mt dest)) -> do
+      --referencedBy <-
+      --posIn <- getMessagePos mid
+      upDownRows False row --posIn
+      decrMaxRow
+      ms' <- getMessages
+      let newMMap = M.delete mid ms'
+      setMMap newMMap
+      pushFreeMid mid
+      
+    Nothing -> return ()
+
+getMessagePos :: MessageId -> Proto Pos
+getMessagePos mid = do
+  ms <- getMessages
+  let maybeM = M.lookup mid ms
+  case maybeM of
+    Nothing -> error "SHOULDN'T GET HERE!!" --return (-1)
+    Just (Message row _) -> do return row
 
 
   
@@ -151,8 +221,8 @@ addMessageAt posIn (MessageD fr t m) = do
   let maybeP = M.lookup fr ps
   case maybeP of
     Nothing -> return ()
-    Just (Principal _ outbox) -> do
-      let newP = Principal posIn (outbox ++ [newMid])
+    Just (Principal col outbox) -> do
+      let newP = Principal col (outbox ++ [newMid])
           newPMap = M.insert fr newP ps
       setPMap newPMap
   
@@ -226,7 +296,10 @@ removePrincipalCalled name = do
   ps <- getPrincipals
   case lookup name ps of
     Nothing -> return ()
-    Just (Principal col _) -> removePrincipalAt col
+    Just (Principal col outbox) -> do
+      mapM_ removeMessage outbox  --update(messages that send to principal being removed) OR remove(messages 
+      removePrincipalAt col
+
 
 
 removePrincipalAt :: Pos -> Proto ()
@@ -274,7 +347,7 @@ upDownRows b posInserted = do
   setMMap (fromList updatedList)
   return ()
 
---changeCols :: Bool -> Pos -> [(Name, Principal)] -> [(Name, Principal)] 
+changeRows :: Bool -> Pos -> [(MessageId, Message)] -> [(MessageId, Message)] 
 changeRows b pos xs = L.map (change' b pos) xs
 
 change' sign pos (mid, mIn@(Message row contents)) =
@@ -345,12 +418,12 @@ pushFreeMid mid = do
 
 popFreeMid :: Proto (Maybe MessageId)
 popFreeMid = do
-  (ProtoState a b c d e fids@(i:rest) g) <- get
+  (ProtoState a b c d e fids g) <- get
   case null fids of
     True -> return Nothing
     False -> do
-      put (ProtoState a b c d e rest g)
-      return $ Just i
+      put (ProtoState a b c d e (tail fids) g)
+      return $ Just (head fids)
 
 removeFreeMid :: MessageId -> Proto ()
 removeFreeMid mid = do
@@ -372,6 +445,11 @@ decrMaxCol :: Proto ()
 decrMaxCol = do
   (ProtoState a b maxCol d e f g) <- get
   put (ProtoState a b (maxCol-1) d e f g)
+
+decrMaxRow :: Proto ()
+decrMaxRow = do
+  (ProtoState a b c maxRow e f g) <- get
+  put (ProtoState a b c (maxRow - 1) e f g)
 
 incrMaxMid :: Proto ()
 incrMaxMid = do

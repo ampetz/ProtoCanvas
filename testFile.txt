@@ -1,3 +1,1 @@
-A to B,B: AAAAAA
-B, T: B to T
-C, T: c t
+A,B: A to B

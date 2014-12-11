@@ -11,14 +11,18 @@ import Data.Map hiding (map)
 import Data.String
 --import System.IO
 --import System.Directory
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as LBS
+import Data.Binary hiding (get, put)
 
 import ProtoState
+import ParseFile
 
 prompt :: String -> IO FilePath
 prompt s = do
   putStrLn s --"Enter command:"
-  fileName <- getLine
-  return fileName --"testFile.txt" --fileName
+  command <- getLine
+  return command --"testFile.txt" --fileName
 
 commandPrompt = Main.prompt "Enter command: "
 --savePrompt = prompt "Enter name of file to save to: "
@@ -56,6 +60,15 @@ pcmain :: TVar ProtoState -> Proto ()
 pcmain state_var = do
   fileName <- liftIO $ commandPrompt
   case fileName of
+    "add" -> do ProtoState{..} <- get
+                liftIO $ putStrLn "Enter Messge to Add: "
+                m <- liftIO getLine
+                let md = parseLine m
+                addMessageAt (maxRow + 1) md
+                pcmain state_var
+
+
+      
     "d" -> do state <- get
               liftIO $ print state
               liftIO $ atomically $
@@ -69,9 +82,34 @@ pcmain state_var = do
     "a" ->  do
           addFromFile "testFile.txt" --fileName
           pcmain state_var
-    --"s" -> do
+    "sa" -> do state@ProtoState{..} <- get
+               fn <- liftIO $ saveStateAs state
+               case fn of
+                 "" -> return ()
+                 _ -> put ProtoState{savedAs = fn, ..}
+               pcmain state_var
+    "s" -> do state@ProtoState{..} <- get
+              --let fn = savedAs state
+              case (savedAs) of
+                "" -> do
+                  sa <- liftIO $ saveStateAs state
+                  --put startState
+                  put ProtoState{savedAs = sa, ..}
+                _ -> do
+                  liftIO $ do
+                    BS.writeFile savedAs (BS.concat $ LBS.toChunks
+                                     (encode state))
+                    putStrLn $ "Saved: " ++ savedAs
+              pcmain state_var
+                  
+    "l" -> do newState <- liftIO loadState
+              put newState
+              pcmain state_var
+              
       
-    _ -> pcmain state_var
+      
+    _ -> do liftIO $ putStrLn "Unknown command.  Please retry: " 
+            pcmain state_var
  
 
 customDraw :: DeviceContext -> ProtoState -> Canvas ()

@@ -3,7 +3,7 @@
 module ProtoState where
 
 import Prelude hiding (lookup)
-import Data.Map hiding ((\\), null, foldl)
+import Data.Map hiding ((\\), null, foldl,filter)
 import qualified Data.Map as M
 import Data.List hiding (insert, lookup)
 import qualified Data.List as L
@@ -288,18 +288,37 @@ addMessagesAt posIn (md:mds) = do
 
 addMessageAt :: Pos -> MessageD -> Proto ()
 addMessageAt posIn (MessageD fr t m) = do
+  ProtoState{..} <- get
   newMid <- getNewMid
   upDownRows True posIn  
   addToMMap (newMid, Message posIn (Send m t))    --Self action logic HERE!!!
   incrMaxRow
-  ps <- getPrincipals
-  let maybeP = M.lookup fr ps
+  --ps <- getPrincipals
+  let maybeP = M.lookup fr pMap
+      maybeP' = M.lookup t pMap
+
   case maybeP of
-    Nothing -> return ()
+    Nothing -> do
+      addPrincipalAt (maxCol+1) fr
+      let newP = Principal (maxCol + 1) [newMid]
+          newPMap = M.insert fr newP pMap
+      setPMap newPMap
     Just (Principal col outbox) -> do
       let newP = Principal col (outbox ++ [newMid])
-          newPMap = M.insert fr newP ps
+          newPMap = M.insert fr newP pMap
       setPMap newPMap
+
+  case maybeP' of
+        Nothing -> do
+          ProtoState{..} <- get
+          addPrincipalAt (maxCol+1) fr
+          let newP = Principal (maxCol + 1) []
+              newPMap = M.insert t newP pMap
+          setPMap newPMap
+        Just _ {-(Principal col outbox)-} -> do return ()
+          {-let newP = Principal col (outbox ++ [newMid])
+              newPMap = M.insert t newP pMap
+          setPMap newPMap -}
   
 
   
@@ -554,8 +573,8 @@ addMessages mds = do
   return ()
 
 
-saveState :: ProtoState -> IO ()
-saveState state@ProtoState{..} = do
+saveStateAs :: ProtoState -> IO FilePath
+saveStateAs state@ProtoState{..} = do
   hd <- getHomeDirectory
   createDirectoryIfMissing True (hd </> ".proto")
   fn <- savePrompt
@@ -569,27 +588,61 @@ saveState state@ProtoState{..} = do
         'y' -> do
           BS.writeFile file (BS.concat $ LBS.toChunks (B.encode state))
           putStrLn $ "Saved to: " ++ file
-        'n' -> return ()
-  
-              
+          return file
+        'n' -> return ""
+    False -> do
+      BS.writeFile file (BS.concat $ LBS.toChunks (B.encode state))
+      putStrLn $ "Saved to: " ++ file
+      return file
 
-loadState :: FilePath -> IO (Maybe ProtoState)
-loadState fn = do
+displayDirContents :: FilePath -> IO [(Int,FilePath)]
+displayDirContents dirPath = do
+  contents' <- getDirectoryContents dirPath
+  let contents = filter dotPred contents'
+      zipList = zip [1..] contents
+  displayDirList zipList
+  return zipList
+  
+ where
+   dotPred :: FilePath -> Bool
+   dotPred fp = case (head fp) of
+     '.' -> False
+     _ -> True
+   displayDirList :: [(Int,FilePath)] -> IO ()
+   displayDirList xs = do
+     mapM_ display xs
+         
+   display :: (Int, FilePath) -> IO ()
+   display (i,fp) = do
+     putStrLn $ (show i) ++ ") " ++ fp 
+
+loadState :: IO (ProtoState)
+loadState = do
   hd <- getHomeDirectory
-  --createDirectoryIfMissing True (home </> ".proto")
-  let file = hd </> ".proto" </> fn
-  exists <- doesFileExist file
-  case exists of
-    True -> do
-      --loadedSt <- B.readFile file
-      loadedSt <- tryJust (\(e :: IOException) -> return $ Just ()) (BS.readFile file)
+  createDirectoryIfMissing True (hd </> ".proto")
+  let dirPath = hd </> ".proto"
+  putStrLn "Enter the number of the protocol file you wish to load: "
+  zipList <- displayDirContents dirPath
+  num' <- getChar
+  let num = read [num']
+  let maxNum = length $ L.map fst zipList
+  case or [(num > maxNum), (num < 1)] of
+    True -> do putStrLn "invalid number. try again:"
+               return startState
+    False -> do
+      let file' = snd $ zipList !! (num - 1)
+          file = dirPath </> file'
+      --loadedSt <- BS.readFile file
+      --return $ B.decode (LBS.fromChunks [loadedSt])
+      loadedSt <- tryJust (\(e :: IOException) ->
+                            return $ Just ()) (BS.readFile file)
       case loadedSt of 
-        Left _ -> do putStrLn $  "File: " ++ file ++
-                              " exists, but may be corrupted." ++
-                              "  Loading empty state"
-                     return $ Just startState
-        Right r -> return $ Just $ B.decode (LBS.fromChunks [r])
-    False -> return Nothing
+        Left _ -> do
+          putStrLn $  "\nFile: "++file ++" exists, but may be corrupted." ++
+            "  Loading empty state"
+          return $ startState
+        Right r -> return $ B.decode (LBS.fromChunks [r]) 
+    --False -> return Nothing
 
 
 

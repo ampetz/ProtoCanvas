@@ -1,5 +1,5 @@
+{-# LANGUAGE RecordWildCards #-}
 module Main where
-
 import Prelude hiding (lookup)
 import Graphics.Blank
 import Control.Monad.Trans
@@ -14,11 +14,15 @@ import Data.String
 
 import ProtoState
 
-prompt :: IO String
-prompt = do
-  putStrLn "Enter command:"
+prompt :: String -> IO FilePath
+prompt s = do
+  putStrLn s --"Enter command:"
   fileName <- getLine
   return fileName --"testFile.txt" --fileName
+
+commandPrompt = Main.prompt "Enter command: "
+--savePrompt = prompt "Enter name of file to save to: "
+
 
 main = do
   state_var <- atomically $ newTVar startState
@@ -50,7 +54,7 @@ viewer context state_var = do
 --TODO make list of keywords:  ["save", "add",...] and make sure the user doesn't create a file of the same name as one of them.  OR do commands:  add filename, save filename, etc.
 pcmain :: TVar ProtoState -> Proto ()
 pcmain state_var = do
-  fileName <- liftIO $ prompt
+  fileName <- liftIO $ commandPrompt
   case fileName of
     "d" -> do state <- get
               liftIO $ print state
@@ -58,40 +62,42 @@ pcmain state_var = do
                 writeTVar state_var state
               --customDraw context
               pcmain state_var
-    "q" -> do s <- liftIO $ prompt
+    "q" -> do s <- liftIO $ commandPrompt
               liftIO $ putStrLn s
               pcmain state_var
               return ()
     "a" ->  do
           addFromFile "testFile.txt" --fileName
           pcmain state_var
+    --"s" -> do
+      
     _ -> pcmain state_var
  
 
 customDraw :: DeviceContext -> ProtoState -> Canvas ()
-customDraw context state@(ProtoState ps ms pid mid mmid fmids eMode) = do
-  let xs = keys ps --[1..pid]
+customDraw context state@ProtoState{..}{-state@(ProtoState pMap mMap maxCol maxRow mmid fmids eMode)-} = do
+  let xs = keys pMap --[1..maxCol]
       (w,h) = (width context, height context)
   clearRect (0,0,w,h)
-  let (rectW, rectH) = scaler w pid
-      totalHSpace = getTotalHSpace w rectW (fromIntegral pid)
-      hSpace = totalHSpace / (fromIntegral pid + 1)
+  let (rectW, rectH) = scaler w maxCol
+      totalHSpace = getTotalHSpace w rectW (fromIntegral maxCol)
+      hSpace = totalHSpace / (fromIntegral maxCol + 1)
       totalVSpace = getTotalVSpace h rectH
-      vSpace = totalVSpace / (fromIntegral (mid + 1))
+      vSpace = totalVSpace / (fromIntegral (maxRow + 1))
   mapM_ (f context hSpace vSpace state) xs
       
   --return ()
 
  where
    f :: DeviceContext -> Double -> Double -> ProtoState -> String -> Canvas ()
-   f c hSpace vSpace state@(ProtoState ps ms pid mid mmid fmids eMode) n = do
-     let xPMaybe = lookup n ps
+   f c hSpace vSpace state@ProtoState{..}{-(ProtoState pMap mMap maxCol maxRow mmid fmids eMode)-} n = do
+     let xPMaybe = lookup n pMap
          (x, ob) = case xPMaybe of
            Nothing -> ((-1), [])
            Just (Principal x'' ob'')  -> (x'', ob'')
          --x = col p
          (w, h) = (width c, height c)
-         (rectW, rectH) = scaler w pid
+         (rectW, rectH) = scaler w maxCol
 
          extra = (fromIntegral x - 1) * rectW
          (rx,ry) = (hSpace * fromIntegral x + lrborder + extra, tborder)
@@ -114,7 +120,7 @@ customDraw context state@(ProtoState ps ms pid mid mmid fmids eMode) = do
            Just (Principal name outbox) -> (name, outbox) -} -}
 
          
-         slist = keys ps --Prelude.map name principals
+         slist = keys pMap --Prelude.map name principals
          maxStringL = Prelude.maximum (Prelude.map Prelude.length slist)
          dMax :: Double
          dMax = fromIntegral maxStringL
@@ -138,14 +144,14 @@ customDraw context state@(ProtoState ps ms pid mid mmid fmids eMode) = do
      
     where g :: DeviceContext -> Double -> Double -> ProtoState ->
                Pos -> MessageId -> Canvas ()
-          g c hSpace vSpace (ProtoState ps ms pid mid mmid fmids eMode)
+          g c hSpace vSpace ProtoState{..}{-(ProtoState pMap mMap maxCol maxRow mmid fmids eMode)-}
               x y' = do
-            let yMaybe = lookup y' ms
+            let yMaybe = lookup y' mMap
                 (y,contents) = case yMaybe of
                   Nothing -> ((-1), (Action ""))
                   Just (Message y'' contents') -> (y'', contents')
                 (w,h) = (width c, height c)
-                (rectW, rectH) = scaler w pid
+                (rectW, rectH) = scaler w maxCol
                 extra = (fromIntegral x - 1) * rectW
                 start@(startX, startY) =
                   ( hSpace*fromIntegral x + lrborder + (rectW/2) + extra                         ,tborder + rectH + (vSpace*fromIntegral y) )
@@ -157,7 +163,7 @@ customDraw context state@(ProtoState ps ms pid mid mmid fmids eMode) = do
                 --contents = mailbox !! y -}
             case contents of
               Send m toN -> do
-                let pMaybe = lookup toN ps
+                let pMaybe = lookup toN pMap
                     (toId, _) = case pMaybe of
                       Nothing -> (-1, 0)
                       Just (Principal s _) -> (s, 0)
@@ -174,7 +180,7 @@ customDraw context state@(ProtoState ps ms pid mid mmid fmids eMode) = do
                       Main.Right -> 0
                       Main.Left -> hSpace*2
                     hCenter = startX + (hSpace) - adjust
-                    messages = elems ms
+                    messages = elems mMap
                     nMes = length messages
                     contents''' = map ProtoState.contents messages
                     allMessageTexts = map extractText contents'''
@@ -184,7 +190,7 @@ customDraw context state@(ProtoState ps ms pid mid mmid fmids eMode) = do
                       1 -> 3
                       2 -> 3
                       _ -> maxLen'
-                    slist = allMessageTexts --keys ps --Prelude.map name principals
+                    slist = allMessageTexts --keys pMap --Prelude.map name principals
                     maxStringL = maxLen --Prelude.maximum (Prelude.map Prelude.length slist)
                     dMax :: Double
                     dMax = fromIntegral maxStringL

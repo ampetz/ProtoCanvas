@@ -1,3 +1,5 @@
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE RecordWildCards #-}
 module ProtoState where
 
 import Prelude hiding (lookup)
@@ -5,6 +7,13 @@ import Data.Map hiding ((\\), null, foldl)
 import qualified Data.Map as M
 import Data.List hiding (insert, lookup)
 import qualified Data.List as L
+import System.Directory
+import System.FilePath
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as LBS
+import qualified Data.Binary as B
+import Data.Word
+import Control.Exception
 
 import {-qualified-} Control.Monad.Trans.State {-as T-}
 import Control.Monad.Trans(liftIO)
@@ -22,6 +31,23 @@ data Contents = Send MessageText To
                 | Action MessageText  --Action-send to self(vertical action bar with text beside?)--
                 deriving (Show, Eq)
 
+instance B.Binary Contents where
+  put (Send m t) = do
+    B.put (0::Word8)
+    B.put m
+    B.put t
+  put (Action mt) = do
+    B.put (1::Word8)
+    B.put mt
+  get = do x <- B.get :: B.Get Word8
+           case x of
+             0 -> do m <- B.get
+                     t <- B.get
+                     return $ Send m t
+             1 -> do mt <- B.get
+                     return $ Action mt
+    
+
 type Pos = Int --Represents a row(for messages) or column(for principals) position in the diagram
 data Message = Message { row       :: Pos   -- Pos represents message row
                        , contents  :: Contents
@@ -33,23 +59,70 @@ data Principal = Principal
                  , outbox  :: Outbox
                  } deriving (Eq, Show)
 
+instance B.Binary Message where
+  put (Message a b) = do
+    B.put a
+    B.put b
+  get = do
+    a <- B.get
+    b <- B.get
+    return $ Message a b
+
+instance B.Binary Principal where
+  put (Principal a b) = do
+    B.put a
+    B.put b
+  get = do
+    a <- B.get
+    b <- B.get
+    return $ Principal a b
 
 -- TODO: add messageIndex :: Map MessageId Slot
 --       AND change Outbox to:  type Outbox = [MessageId] where MessageId = Int
 data ProtoState = ProtoState
-             { principals        :: Map Name Principal
-             , messages          :: Map MessageId Message 
+             { pMap        :: Map Name Principal
+             , mMap          :: Map MessageId Message 
              , maxCol            :: Pos
              , maxRow            :: Pos  
-             , maxMessageId      :: MessageId
-             , freeMids          :: [MessageId]
+             , mmid              :: MessageId
+             , fmids          :: [MessageId]
              , editMode          :: Bool
+             , savedAs           :: FilePath
              } deriving (Eq, Show)
+
+instance B.Binary ProtoState where
+  put (ProtoState a b c d e f g h) = do
+    B.put a
+    B.put b
+    B.put c
+    B.put d
+    B.put e
+    B.put f
+    B.put g
+    B.put h
+  get = do
+    a <- B.get
+    b <- B.get
+    c <- B.get
+    d <- B.get
+    e <- B.get
+    f <- B.get
+    g <- B.get
+    h <- B.get
+    return $ ProtoState a b c d e f g h
 
 
 type Proto = StateT ProtoState IO
 data MaybeAfter = End
                   | After Pos
+prompt :: String -> IO FilePath
+prompt s = do
+  putStrLn s --"Enter command:"
+  fileName <- getLine
+  return fileName --"testFile.txt" --fileName
+
+--commandPrompt = ProtoState.prompt "Enter command: "
+savePrompt = ProtoState.prompt "Enter name of file to save to: "
 
 stateMain = exec pTest
 
@@ -64,7 +137,9 @@ outputState = do
 
 pTest :: Proto ()
 pTest = do
-  mds <- liftIO $ fromFile "testFile.txt"
+  outputState
+  incrMaxMid
+  {-mds <- liftIO $ fromFile "testFile.txt"
   buildPrincipals mds 1
   addMessagesAt 1 mds
   outputState
@@ -136,7 +211,7 @@ pTest = do
   removePrincipalCalled "2"
   removePrincipalCalled "4"
   removePrincipalCalled "5"
-  removePrincipalCalled "3" -}
+  removePrincipalCalled "3" -} -}
   return ()
 
   
@@ -369,92 +444,88 @@ getMaxCol = do
 getMaxMid :: Proto MessageId
 getMaxMid = do
   state <- get
-  return $ maxMessageId state
+  return $ mmid state
 
 
 setPMap :: Map Name Principal -> Proto ()
 setPMap newMap = do
-   (ProtoState _ a b c d e f) <- get
-   put (ProtoState newMap a b c d e f)
+   ProtoState {..} <- get 
+   put ProtoState {pMap = newMap, ..}
 
 setMMap :: Map MessageId Message -> Proto ()
 setMMap newMap = do
-   (ProtoState a _ b c d e f) <- get
-   put (ProtoState a newMap b c d e f)
+  ProtoState {..} <- get 
+  put ProtoState {mMap = newMap, ..}
 
 
 addToPMap :: (Name, Principal) -> Proto ()
 addToPMap (n, p) = do
-  (ProtoState ps a b c d e f) <- get
-  let newPs = insert n p ps
-  put (ProtoState newPs a b c d e f)
+  ProtoState {..} <- get 
+  put ProtoState {pMap = insert n p pMap, ..}
 
 --addToPMap :: (Name, Principal) -> Proto ()
 addToMMap (mid, m) = do
-  (ProtoState a ms c d e f g) <- get
-  let newMs = insert mid m ms
-  put (ProtoState a newMs c d e f g)
+  ProtoState {..} <- get 
+  put ProtoState {mMap = insert mid m mMap, ..}
   
-
 getPrincipals :: Proto (Map Name Principal)
 getPrincipals = do
   state <- get
-  return (principals state)
+  return (pMap state)
 
 getMessages :: Proto (Map MessageId Message)
 getMessages = do
   state <- get
-  return (messages state)
+  return (mMap state)
 
 getFreeMids :: Proto [MessageId]
 getFreeMids = do
   state <- get
-  return (freeMids state)
+  return (fmids state)
 
 pushFreeMid :: MessageId -> Proto ()
 pushFreeMid mid = do
-  (ProtoState a b c d e fs g) <- get
-  put (ProtoState a b c d e (fs ++ [mid]) g)
+  ProtoState {..} <- get 
+  put ProtoState {fmids = (fmids ++ [mid]), ..}
 
 popFreeMid :: Proto (Maybe MessageId)
 popFreeMid = do
-  (ProtoState a b c d e fids g) <- get
-  case null fids of
+  ProtoState{..} <- get
+  case null fmids of
     True -> return Nothing
     False -> do
-      put (ProtoState a b c d e (tail fids) g)
-      return $ Just (head fids)
+      put ProtoState {fmids = tail fmids, ..}
+      return $ Just (head fmids)
 
 removeFreeMid :: MessageId -> Proto ()
 removeFreeMid mid = do
-  (ProtoState a b c d e fs g) <- get
-  put (ProtoState a b c d e (L.delete mid fs) g)
-
+  ProtoState {..} <- get 
+  put ProtoState {fmids = L.delete mid fmids, ..}
 
 incrMaxCol :: Proto ()
 incrMaxCol = do
-  (ProtoState a b maxCol d e f g) <- get
-  put (ProtoState a b (maxCol+1) d e f g)
-
-incrMaxRow :: Proto ()
-incrMaxRow = do
-  (ProtoState a b c maxRow e f g) <- get
-  put (ProtoState a b c (maxRow+1) e f g)
+  ProtoState {..} <- get 
+  put ProtoState {maxCol = (maxCol + 1), ..}
 
 decrMaxCol :: Proto ()
 decrMaxCol = do
-  (ProtoState a b maxCol d e f g) <- get
-  put (ProtoState a b (maxCol-1) d e f g)
+  ProtoState {..} <- get 
+  put ProtoState {maxCol = (maxCol - 1), ..}
 
+incrMaxRow :: Proto ()
+incrMaxRow = do
+  ProtoState {..} <- get 
+  put ProtoState {maxRow = (maxRow + 1), ..}
+  
 decrMaxRow :: Proto ()
 decrMaxRow = do
-  (ProtoState a b c maxRow e f g) <- get
-  put (ProtoState a b c (maxRow - 1) e f g)
+  ProtoState {..} <- get 
+  put ProtoState {maxRow = (maxRow - 1), ..}
 
 incrMaxMid :: Proto ()
 incrMaxMid = do
-  (ProtoState a b c d maxMid f g) <- get
-  put (ProtoState a b c d (maxMid+1) f g)
+  ProtoState {..} <- get
+  put ProtoState {mmid = (mmid + 1), ..}
 
 
 
@@ -477,10 +548,50 @@ addFromFile fileName = do
 
 addMessages :: [MessageD] -> Proto ()
 addMessages mds = do
-  (ProtoState _ _ maxCol maxRow _ _ _) <- get
+  ProtoState {..} <- get --_ _ maxCol maxRow _ _ _) <- get
   buildPrincipals mds (maxCol + 1)
   addMessagesAt (maxRow + 1) mds
   return ()
+
+
+saveState :: ProtoState -> IO ()
+saveState state@ProtoState{..} = do
+  hd <- getHomeDirectory
+  createDirectoryIfMissing True (hd </> ".proto")
+  fn <- savePrompt
+  let file = hd </> ".proto" </> fn
+  exists <- doesFileExist file
+  case exists of
+    True -> do
+      putStrLn "This file already exists.  Do you wish to overwrite?(y,n)"
+      yn <- getChar
+      case yn of
+        'y' -> do
+          BS.writeFile file (BS.concat $ LBS.toChunks (B.encode state))
+          putStrLn $ "Saved to: " ++ file
+        'n' -> return ()
+  
+              
+
+loadState :: FilePath -> IO (Maybe ProtoState)
+loadState fn = do
+  hd <- getHomeDirectory
+  --createDirectoryIfMissing True (home </> ".proto")
+  let file = hd </> ".proto" </> fn
+  exists <- doesFileExist file
+  case exists of
+    True -> do
+      --loadedSt <- B.readFile file
+      loadedSt <- tryJust (\(e :: IOException) -> return $ Just ()) (BS.readFile file)
+      case loadedSt of 
+        Left _ -> do putStrLn $  "File: " ++ file ++
+                              " exists, but may be corrupted." ++
+                              "  Loading empty state"
+                     return $ Just startState
+        Right r -> return $ Just $ B.decode (LBS.fromChunks [r])
+    False -> return Nothing
+
+
 
 {-
 --maintain only the messageId in the outbox, then maintain an overall Map Id Contents.  Then we can insert messages at arbitrary points using indexedArray.hs(in combination with the Data.Map.toList)
@@ -566,7 +677,7 @@ getNewNamesP mds = do
 -}  
 
 startState :: ProtoState
-startState = ProtoState empty empty 0 0 0 [] False
+startState = ProtoState empty empty 0 0 0 [] False ""
 
 
 

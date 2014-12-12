@@ -9,6 +9,7 @@ import Control.Concurrent.STM
 import Control.Concurrent
 import Data.Map hiding (map)
 import Data.String
+import Data.Char
 --import System.IO
 --import System.Directory
 import qualified Data.ByteString as BS
@@ -58,8 +59,9 @@ viewer context state_var = do
 --TODO make list of keywords:  ["save", "add",...] and make sure the user doesn't create a file of the same name as one of them.  OR do commands:  add filename, save filename, etc.
 pcmain :: TVar ProtoState -> Proto ()
 pcmain state_var = do
-  fileName <- liftIO $ commandPrompt
-  case fileName of
+  cmd' <- liftIO $ commandPrompt
+  let cmd = Prelude.takeWhile (not . isSpace) cmd'
+  case cmd of
     "add" -> do ProtoState{..} <- get
                 liftIO $ putStrLn "Enter Messge to Add: "
                 m <- liftIO getLine
@@ -84,9 +86,8 @@ pcmain state_var = do
           pcmain state_var
     "sa" -> do state@ProtoState{..} <- get
                fn <- liftIO $ saveStateAs state
-               case fn of
-                 "" -> return ()
-                 _ -> put ProtoState{savedAs = fn, ..}
+               put ProtoState{savedAs = fn, editMode = False, ..}
+               --put ProtoState{editMode = False}
                pcmain state_var
     "s" -> do state@ProtoState{..} <- get
               --let fn = savedAs state
@@ -99,12 +100,57 @@ pcmain state_var = do
                   liftIO $ do
                     BS.writeFile savedAs (BS.concat $ LBS.toChunks
                                      (encode state))
+                    
                     putStrLn $ "Saved: " ++ savedAs
+                  put ProtoState{editMode = False, ..}
               pcmain state_var
                   
     "l" -> do newState <- liftIO loadState
               put newState
               pcmain state_var
+    "e" -> do state@ProtoState{..} <- get
+              case editMode of
+                True -> do
+                  liftIO $ putStrLn "Turning editMode OFF"
+                  put ProtoState{editMode = not editMode, ..}
+                False -> do
+                  liftIO $ putStrLn "Turning editMode ON"
+                  put ProtoState{editMode = not editMode, ..}
+              pcmain state_var
+
+    "rm" -> do
+      state@ProtoState{..} <- get
+      liftIO $ putStrLn "Enter message number to remove: "
+      num' <-liftIO getChar
+      --removeMessage (read[num'])
+      let num :: Int
+          num = read [num']
+          
+      case or [(num > maxRow), (num < 1)] of
+        True -> liftIO $ putStrLn "invalid mid"
+        False -> do
+          removeMessageAt num
+          pruneOutboxes
+          liftIO $ putStrLn $ "Removed message" ++ (show num)
+
+      pcmain state_var
+
+    "rp" -> do
+      state@ProtoState{..} <- get
+      liftIO $ putStrLn "Enter principal number to remove: "
+      num' <-liftIO getChar  --TODO:  readIO(in case num > 9)
+      --removeMessage (read[num'])
+      let num :: Int
+          num = read [num']
+          
+      case or [(num > maxCol), (num < 1)] of
+        True -> liftIO $ putStrLn "invalid pid"
+        False -> do
+          removePrincipalAt num
+          liftIO $ putStrLn $ "Removed principal" ++ (show num)
+
+      pcmain state_var
+                  
               
       
       
@@ -147,6 +193,7 @@ customDraw context state@ProtoState{..}{-state@(ProtoState pMap mMap maxCol maxR
          end = (xStart, (h - tborder))
      drawLine (MoveTo start) end vLineSize vLineColor
 
+     let editColCoor = ((fst start) + rectW/6, (snd start) + rectH/1.5)
 
      let val = 1.04
          {-principals = elems ps
@@ -156,10 +203,13 @@ customDraw context state@ProtoState{..}{-state@(ProtoState pMap mMap maxCol maxR
          {-(textString, outbox) = (n,ob){-case maybePrincipal of
            Nothing -> ("", [])
            Just (Principal name outbox) -> (name, outbox) -} -}
-
+         editColText = case editMode of
+           True -> "(" ++ (show x) ++ ")"
+           False -> ""
          
          slist = keys pMap --Prelude.map name principals
          maxStringL = Prelude.maximum (Prelude.map Prelude.length slist)
+                      + length editColText
          dMax :: Double
          dMax = fromIntegral maxStringL
          minStringL = Prelude.minimum (Prelude.map Prelude.length slist)
@@ -172,9 +222,14 @@ customDraw context state@ProtoState{..}{-state@(ProtoState pMap mMap maxCol maxR
          slider = pTextSizeSliders !! (x-1)
          fontSize = pTextSizeSlider + slider +
                     ((rectH * (diff + (dMax*val))) / (dMax * dMax))
+
+         
      drawText fontSize pTextColor "center" "middle" {- MiddleBaseline-}
-              (pack n{-textString-}) ((rx + (rectW / 2)), (ry + (rectH / 2)))
+              (pack (n++editColText){-textString-}) ((rx + (rectW / 2)), (ry + (rectH / 2)))
      --let mailbox = mailbox
+
+     {-drawText (fontSize / 2) pTextColor "start" "alphabetic"
+              (pack $ show x) editColCoor -}
      case (Prelude.null ob{-outbox-}) of
        True -> return ()
        False -> mapM_ (g c hSpace vSpace state x) (ob{-outbox-})
@@ -207,13 +262,24 @@ customDraw context state@ProtoState{..}{-state@(ProtoState pMap mMap maxCol maxR
                       Just (Principal s _) -> (s, 0)
                     hspace = rectW + hSpace
                     delta = fromIntegral (toId - x)
-                    end = (startX + hspace*delta, startY)
+                    end = case toId of
+                      (-1) -> (startX, startY)
+                      _ -> (startX + hspace*delta, startY)
                     arrowSize = 10 --hardcoded for now...
                     arrowDir = case x < toId of
                       True -> Main.Right
                       False -> Main.Left
-                drawLineAndArrow (MoveTo start) end hLineSize hLineColor
-                                 arrowSize arrowDir
+
+                case toId of
+                  (-1) -> do
+                    drawLineAndArrow (MoveTo start)
+                      ((fst end) - hSpace/2,snd end) hLineSize (pack "blue")
+                      arrowSize arrowDir --TODO: fix this
+
+                  _ -> do
+                    drawLineAndArrow (MoveTo start) end hLineSize hLineColor
+                                     arrowSize arrowDir
+               
                 let adjust = case arrowDir of
                       Main.Right -> 0
                       Main.Left -> hSpace*2
@@ -248,7 +314,18 @@ customDraw context state@ProtoState{..}{-state@(ProtoState pMap mMap maxCol maxR
                     yPos = startY --startY + (vSpace / 2)
 
                 drawText fontSize mTextColor "center" "bottom"
-                         (pack m) (xPos,yPos)  
+                         (pack m) (xPos,yPos)
+                let editRowCoor = case arrowDir of
+                      Main.Right -> ((fst start){--rectW/2-}, (snd start))
+                      Main.Left -> ((fst end) {-- rectW/2-}, (snd end))
+                   
+                      
+
+                case editMode of
+                  True -> let editRowText = "(" ++ (show y) ++ ")" in
+                    drawText fontSize mTextColor "right" "middle"
+                             (pack editRowText) editRowCoor
+                  False -> return ()
                 return ()
                  where extractText :: Contents -> MessageText
                        extractText contents = case contents of

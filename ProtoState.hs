@@ -395,6 +395,18 @@ removePrincipalCalled name = do
       removePrincipalAt col
 
 
+removeMessageAt :: Pos -> Proto ()
+removeMessageAt posIn = do
+  ms <- getMessages
+  let list = toList ms
+      maybeM = find (findPred posIn) list
+  case maybeM of
+    Nothing -> return ()
+    Just (mid, _) -> removeMessage mid
+
+   where findPred :: Pos -> (MessageId, Message) -> Bool
+         findPred rIn (_, Message r _) = rIn == r
+  
 
 removePrincipalAt :: Pos -> Proto ()
 removePrincipalAt posIn = do

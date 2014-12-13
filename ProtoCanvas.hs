@@ -1,10 +1,12 @@
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Main where
 import Prelude hiding (lookup)
 import Graphics.Blank
 import Control.Monad.Trans
 import Control.Monad.Trans.State
-import Data.Text hiding (map,maximum,length)
+import Control.Monad.Trans.Reader
+import Data.Text hiding (map,maximum,minimum,length)
 import Control.Concurrent.STM
 import Control.Concurrent
 import Data.Map hiding (map)
@@ -19,11 +21,20 @@ import Data.Binary hiding (get, put)
 import ProtoState
 import ParseFile
 
+type ProtoViewer = ReaderT ViewerParams Canvas
+data ViewerParams = ViewerParams
+                    { context       :: DeviceContext
+                    , state  :: ProtoState
+                    , hSpace :: Double
+                    , vSpace :: Double  
+                    } deriving ()
+
+
 prompt :: String -> IO FilePath
 prompt s = do
-  putStrLn s --"Enter command:"
+  putStrLn s
   command <- getLine
-  return command --"testFile.txt" --fileName
+  return command
 
 commandPrompt = Main.prompt "Enter command: "
 --savePrompt = prompt "Enter name of file to save to: "
@@ -42,14 +53,9 @@ main = do
 viewer :: DeviceContext -> TVar ProtoState -> IO () --Reader Canvas ()
 viewer context state_var = do
   state <- readTVarIO state_var
-  --do Reader Canvas () here. Reader should contain (DeviceContext, hSpace,vSpace,ProtoState)
-  -- customDraw :: Reader ( Canvas () )
-  -- canvasAction <- customDraw context
-  --THEN execute canvasAction inside send(below)
   send context $ do
     let (w,h) = (width context, height context)
-    --clearRect (0,0,w,h)
-
+    clearRect (0,0,w,h)
     customDraw context state --numPs
   atomically $ do
     state' <- readTVar state_var
@@ -62,6 +68,7 @@ pcmain state_var = do
   cmd' <- liftIO $ commandPrompt
   let cmd = Prelude.takeWhile (not . isSpace) cmd'
   case cmd of
+    "" -> do pcmain state_var
     "add" -> do ProtoState{..} <- get
                 liftIO $ putStrLn "Enter Messge to Add: "
                 m <- liftIO getLine
@@ -121,10 +128,8 @@ pcmain state_var = do
     "rm" -> do
       state@ProtoState{..} <- get
       liftIO $ putStrLn "Enter message number to remove: "
-      num' <-liftIO getChar
-      --removeMessage (read[num'])
-      let num :: Int
-          num = read [num']
+      num <- liftIO readInt
+      liftIO $ putStrLn (show num)
           
       case or [(num > maxRow), (num < 1)] of
         True -> liftIO $ putStrLn "invalid mid"
@@ -138,16 +143,25 @@ pcmain state_var = do
     "rp" -> do
       state@ProtoState{..} <- get
       liftIO $ putStrLn "Enter principal number to remove: "
-      num' <-liftIO getChar  --TODO:  readIO(in case num > 9)
-      --removeMessage (read[num'])
-      let num :: Int
-          num = read [num']
+      num <- liftIO readInt
           
       case or [(num > maxCol), (num < 1)] of
         True -> liftIO $ putStrLn "invalid pid"
         False -> do
           removePrincipalAt num
           liftIO $ putStrLn $ "Removed principal" ++ (show num)
+
+      pcmain state_var
+
+    "c" -> do
+      liftIO $ putStrLn "Are you sure you want to clear?(y/n): "
+      yn <- liftIO getChar
+      case yn of
+        'y' -> do
+          put startState
+          liftIO $ putStrLn "Cleared"
+        'n' -> return ()
+
 
       pcmain state_var
                   
@@ -159,183 +173,177 @@ pcmain state_var = do
  
 
 customDraw :: DeviceContext -> ProtoState -> Canvas ()
-customDraw context state@ProtoState{..}{-state@(ProtoState pMap mMap maxCol maxRow mmid fmids eMode)-} = do
-  let xs = keys pMap --[1..maxCol]
-      (w,h) = (width context, height context)
-  clearRect (0,0,w,h)
-  let (rectW, rectH) = scaler w maxCol
-      totalHSpace = getTotalHSpace w rectW (fromIntegral maxCol)
-      hSpace = totalHSpace / (fromIntegral maxCol + 1)
-      totalVSpace = getTotalVSpace h rectH
-      vSpace = totalVSpace / (fromIntegral (maxRow + 1))
-  mapM_ (f context hSpace vSpace state) xs
-      
-  --return ()
+customDraw context state@ProtoState{..}= do
+    let (w,h) = (width context, height context)
+        (rectW, rectH) = scaler w maxCol
+        totalHSpace = getTotalHSpace w rectW (fromIntegral maxCol)
+        hSpace = totalHSpace / (fromIntegral maxCol + 1)
+        totalVSpace = getTotalVSpace h rectH
+        vSpace = totalVSpace / (fromIntegral (maxRow + 1))
+
+        vp = ViewerParams context state hSpace vSpace
+        principalNames = keys pMap
+    runReaderT (mapM_ drawPrincipals principalNames) vp
 
  where
-   f :: DeviceContext -> Double -> Double -> ProtoState -> String -> Canvas ()
-   f c hSpace vSpace state@ProtoState{..}{-(ProtoState pMap mMap maxCol maxRow mmid fmids eMode)-} n = do
+   drawPrincipals :: Name -> ProtoViewer ()
+   drawPrincipals n = do
+     ViewerParams{..} <- ask
      let xPMaybe = lookup n pMap
          (x, ob) = case xPMaybe of
            Nothing -> ((-1), [])
            Just (Principal x'' ob'')  -> (x'', ob'')
-         --x = col p
-         (w, h) = (width c, height c)
-         (rectW, rectH) = scaler w maxCol
+     lift $ do
+       let (w, h) = (width context, height context) --x = col p
+           (rectW, rectH) = scaler w maxCol
 
-         extra = (fromIntegral x - 1) * rectW
-         (rx,ry) = (hSpace * fromIntegral x + lrborder + extra, tborder)
-     fillAndStrokeRect boxFillColor boxStrokeColor boxStrokeSize (rx,ry)
-                       (rectW,rectH)
+           extra = (fromIntegral x - 1) * rectW
+           (rx,ry) = (hSpace * fromIntegral x + lrborder + extra, tborder)
+       fillAndStrokeRect boxFillColor boxStrokeColor boxStrokeSize
+             (rx,ry) (rectW,rectH)
 
-     let xStart = rx + (rectW / 2)
-         start = (xStart, ry+rectH)
-         end = (xStart, (h - tborder))
-     drawLine (MoveTo start) end vLineSize vLineColor
+       let xStart = rx + (rectW / 2)
+           start = (xStart, ry+rectH)
+           end = (xStart, (h - tborder))
+       --drawLine (MoveTo start) end vLineSize vLineColor
+       drawDashes (MoveTo start) end (vLineSize) (pack "black")
 
-     let editColCoor = ((fst start) + rectW/6, (snd start) + rectH/1.5)
+       let editColCoor = ((fst start) + rectW/6, (snd start) + rectH/1.5)
 
-     let val = 1.04
-         {-principals = elems ps
-         maybePrincipal :: Maybe Principal
-         maybePrincipal = Data.Map.lookup x ps -}
-
-         {-(textString, outbox) = (n,ob){-case maybePrincipal of
-           Nothing -> ("", [])
-           Just (Principal name outbox) -> (name, outbox) -} -}
-         editColText = case editMode of
-           True -> "(" ++ (show x) ++ ")"
-           False -> ""
+           val = 1.04
+           editColText = case editMode of
+             True -> "(" ++ (show x) ++ ")"
+             False -> ""
          
-         slist = keys pMap --Prelude.map name principals
-         maxStringL = Prelude.maximum (Prelude.map Prelude.length slist)
+           slist = keys pMap --Prelude.map name principals
+           maxStringL = Prelude.maximum (Prelude.map Prelude.length slist)
                       + length editColText
-         dMax :: Double
-         dMax = fromIntegral maxStringL
-         minStringL = Prelude.minimum (Prelude.map Prelude.length slist)
-         dMin :: Double
-         dMin = fromIntegral minStringL
-         diff = (dMax - dMin)
-         diff' = case diff == 0 of True -> dMax
-                                   False -> diff
+           dMax :: Double
+           dMax = fromIntegral maxStringL
+           minStringL = Prelude.minimum (Prelude.map Prelude.length slist)
+           dMin :: Double
+           dMin = fromIntegral minStringL
+           diff = (dMax - dMin)
+           diff' = case diff == 0 of
+             True -> dMax
+             False -> diff
 
-         slider = pTextSizeSliders !! (x-1)
-         fontSize = pTextSizeSlider + slider +
+           slider = pTextSizeSliders !! (x-1)
+           fontSize = pTextSizeSlider + slider +
                     ((rectH * (diff + (dMax*val))) / (dMax * dMax))
 
          
-     drawText fontSize pTextColor "center" "middle" {- MiddleBaseline-}
-              (pack (n++editColText){-textString-}) ((rx + (rectW / 2)), (ry + (rectH / 2)))
+       drawText fontSize pTextColor "center" "middle" {- MiddleBaseline-}
+              (pack (n++editColText){-textString-})
+              ((rx + (rectW / 2)), (ry + (rectH / 2)))
      --let mailbox = mailbox
 
      {-drawText (fontSize / 2) pTextColor "start" "alphabetic"
               (pack $ show x) editColCoor -}
      case (Prelude.null ob{-outbox-}) of
        True -> return ()
-       False -> mapM_ (g c hSpace vSpace state x) (ob{-outbox-})
-     return ()
-     
-    where g :: DeviceContext -> Double -> Double -> ProtoState ->
-               Pos -> MessageId -> Canvas ()
-          g c hSpace vSpace ProtoState{..}{-(ProtoState pMap mMap maxCol maxRow mmid fmids eMode)-}
-              x y' = do
-            let yMaybe = lookup y' mMap
-                (y,contents) = case yMaybe of
-                  Nothing -> ((-1), (Action ""))
-                  Just (Message y'' contents') -> (y'', contents')
-                (w,h) = (width c, height c)
-                (rectW, rectH) = scaler w maxCol
-                extra = (fromIntegral x - 1) * rectW
-                start@(startX, startY) =
-                  ( hSpace*fromIntegral x + lrborder + (rectW/2) + extra                         ,tborder + rectH + (vSpace*fromIntegral y) )
-                {-maybePrincipal = Data.Map.lookup x ps
-                principal = case maybePrincipal of
-                  Nothing -> Principal "" []
-                  Just p -> p
-                --mailbox = outbox principal
-                --contents = mailbox !! y -}
-            case contents of
-              Send m toN -> do
-                let pMaybe = lookup toN pMap
-                    (toId, _) = case pMaybe of
-                      Nothing -> (-1, 0)
-                      Just (Principal s _) -> (s, 0)
-                    hspace = rectW + hSpace
-                    delta = fromIntegral (toId - x)
-                    end = case toId of
-                      (-1) -> (startX, startY)
-                      _ -> (startX + hspace*delta, startY)
-                    arrowSize = 10 --hardcoded for now...
-                    arrowDir = case x < toId of
-                      True -> Main.Right
-                      False -> Main.Left
+       False -> mapM_ (g x) (ob{-outbox-})
 
-                case toId of
-                  (-1) -> do
-                    drawLineAndArrow (MoveTo start)
+    -- return canvasAction
+
+
+   g :: Pos -> MessageId -> ProtoViewer ()
+   g x y' = do
+     ViewerParams{..} <- ask
+     lift $ do
+       let yMaybe = lookup y' mMap
+           (y,contents) = case yMaybe of
+             Nothing -> ((-1), (Action ""))
+             Just (Message y'' contents') -> (y'', contents')
+           (w,h) = (width context, height context)
+           (rectW, rectH) = scaler w maxCol
+           extra = (fromIntegral x - 1) * rectW
+           start@(startX, startY) =
+             ( hSpace*fromIntegral x + lrborder + (rectW/2) + extra                         ,tborder + rectH + (vSpace*fromIntegral y) )
+
+       case contents of
+         Send m toN -> do
+           let pMaybe = lookup toN pMap
+               (toId, _) = case pMaybe of
+                 Nothing -> (-1, 0)
+                 Just (Principal s _) -> (s, 0)
+               hspace = rectW + hSpace
+               delta = fromIntegral (toId - x)
+               end = case toId of
+                 (-1) -> (startX, startY)
+                 _ -> (startX + hspace*delta, startY)
+               arrowSize = 10 --hardcoded for now...
+               arrowDir = case x < toId of
+                 True -> Main.Right
+                 False -> Main.Left
+
+           case toId of
+             (-1) -> do
+               drawLineAndArrow (MoveTo start)
                       ((fst end) - hSpace/2,snd end) hLineSize (pack "blue")
                       arrowSize arrowDir --TODO: fix this
 
-                  _ -> do
-                    drawLineAndArrow (MoveTo start) end hLineSize hLineColor
+             _ -> do
+               drawLineAndArrow (MoveTo start) end hLineSize hLineColor
                                      arrowSize arrowDir
                
-                let adjust = case arrowDir of
-                      Main.Right -> 0
-                      Main.Left -> hSpace*2
-                    hCenter = startX + (hSpace) - adjust
-                    messages = elems mMap
-                    nMes = length messages
-                    contents''' = map ProtoState.contents messages
-                    allMessageTexts = map extractText contents'''
-                    allMtLengths = map length allMessageTexts
-                    maxLen' = maximum allMtLengths
-                    maxLen = case maxLen' of
-                      1 -> 3
-                      2 -> 3
-                      _ -> maxLen'
-                    slist = allMessageTexts --keys pMap --Prelude.map name principals
-                    maxStringL = maxLen --Prelude.maximum (Prelude.map Prelude.length slist)
-                    dMax :: Double
-                    dMax = fromIntegral maxStringL
-                    minStringL = Prelude.minimum (Prelude.map Prelude.length slist)
-                    dMin :: Double
-                    dMin = fromIntegral minStringL
-                    diff = (dMax - dMin)
-                    diff' = case diff == 0 of
-                      True -> dMax
-                      False -> diff
-
-                    slider = pTextSizeSliders !! (x-1)
-                    val = 1.04
-                    fontSize = pTextSizeSlider + slider +
+           let adjust = case arrowDir of
+                 Main.Right -> 0
+                 Main.Left -> hSpace*2
+               hCenter = startX + (hSpace) - adjust
+               messages = elems mMap
+               nMes = length messages
+               contents''' = map ProtoState.contents messages
+               allMessageTexts = map extractText contents'''
+               allMtLengths = map length allMessageTexts
+               maxLen' = maximum allMtLengths
+               maxLen = case maxLen' of
+                 1 -> 3
+                 2 -> 3
+                 _ -> maxLen'
+               slist = allMessageTexts 
+               maxStringL = maxLen
+               dMax :: Double
+               dMax = fromIntegral maxStringL
+               minStringL = minimum (Prelude.map length slist)
+               dMin :: Double
+               dMin = fromIntegral minStringL
+               diff = (dMax - dMin)
+               diff' = case diff == 0 of
+                 True -> dMax
+                 False -> diff
+                   
+               slider = pTextSizeSliders !! (x-1)
+               val = 1.04
+               fontSize = pTextSizeSlider + slider +
                           (((vSpace* (0.8)) * (diff + (dMax*val))) / (dMax * dMax))
-                    xPos = hCenter --startX + (hSpace / 2)
-                    yPos = startY --startY + (vSpace / 2)
+               xPos = hCenter --startX + (hSpace / 2)
+               yPos = startY --startY + (vSpace / 2)
 
-                drawText fontSize mTextColor "center" "bottom"
+           drawText fontSize mTextColor "center" "bottom"
                          (pack m) (xPos,yPos)
-                let editRowCoor = case arrowDir of
-                      Main.Right -> ((fst start){--rectW/2-}, (snd start))
-                      Main.Left -> ((fst end) {-- rectW/2-}, (snd end))
+
+           let editRowCoor = case arrowDir of
+                 Main.Right -> ((fst start){--rectW/2-}, (snd start))
+                 Main.Left -> ((fst end) {-- rectW/2-}, (snd end))
                    
                       
 
-                case editMode of
-                  True -> let editRowText = "(" ++ (show y) ++ ")" in
+           case editMode of
+             True -> let editRowText = "(" ++ (show y) ++ ")" in
                     drawText fontSize mTextColor "right" "middle"
                              (pack editRowText) editRowCoor
-                  False -> return ()
-                return ()
-                 where extractText :: Contents -> MessageText
-                       extractText contents = case contents of
-                         Send mt to -> mt
-                         Action mt -> mt
+             False -> return ()
+           --return ()
+      where extractText :: Contents -> MessageText
+            extractText contents = case contents of
+              Send mt to -> mt
+              Action mt -> mt
               --_ -> return ()  TODO Self-Send
 
             
                     
-            return ()
+           -- return ()
             
 
 
@@ -435,7 +443,37 @@ drawLineAndArrow maybeMove (dx,dy) strokeSize strokeColor arrowLen arrowDir =
     strokeStyle strokeColor
     stroke()
     closePath()
+
+
+drawDashes :: Start -> End -> Double -> Color -> Canvas ()
+drawDashes maybeMove (dx,dy) strokeSize strokeColor = do
+  saveRestore $ do
+    beginPath()
+    let (mx,my) = case maybeMove of
+          MoveTo (mx,my) -> (mx,my)
+          Stay -> (-1,-1)
+    case maybeMove of
+      MoveTo _ -> moveTo (mx,my)
+      Stay -> return ()
     
+    let dashPartition = 30
+        lineLen = dy - my
+        frac = lineLen / dashPartition / 2
+        incrs = [0..(dashPartition)]
+        startYs' = map (*(lineLen / dashPartition)) incrs
+        startYs = map (+my) startYs'
+        starts = map ((,) mx) startYs
+
+    --drawLenV (strokeSize-1) (pack "black") frac (mx,my)
+    mapM_ (drawLenV strokeSize strokeColor frac) starts
+    --return ()
+
+--TODO:  f of g in draw
+drawLenV :: Double -> Color -> Double -> Coor -> Canvas ()
+drawLenV strokeSize strokeColor dY (startX, startY) = do
+  drawLine (MoveTo (startX, startY)) (startX, startY + dY) strokeSize
+           strokeColor
+ 
 
 drawLine :: Start -> End -> Double -> Color -> Canvas ()
 drawLine maybeMove (dx,dy) strokeSize strokeColor = do

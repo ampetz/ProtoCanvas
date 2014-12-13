@@ -392,7 +392,12 @@ removePrincipalCalled name = do
     Nothing -> return ()
     Just (Principal col outbox) -> do
       mapM_ removeMessage outbox  --update(messages that send to principal being removed) OR remove(messages 
-      removePrincipalAt col
+      let newPMap = M.delete name ps
+      setPMap newPMap
+      upDownCols False col
+      decrMaxCol
+
+      --removePrincipalAt col
 
 
 removeMessageAt :: Pos -> Proto ()
@@ -412,14 +417,13 @@ removePrincipalAt :: Pos -> Proto ()
 removePrincipalAt posIn = do
   ps <- getPrincipals
   let list = toList ps
-      newList = deleteBy remPred ("", Principal posIn []) list
-      newPmap = fromList newList
-  setPMap newPmap
-  upDownCols False posIn
-  decrMaxCol
+      maybeP = find (remPred posIn)  list
+  case maybeP of
+    Nothing -> return ()
+    Just (name, _) -> removePrincipalCalled name
  where
-   remPred :: (Name, Principal) -> (Name,Principal) -> Bool
-   remPred (_, Principal col _) (_, Principal col' _) = col == col'
+   remPred :: Pos -> (Name,Principal) -> Bool
+   remPred cIn (_, Principal col' _) = cIn == col'
 
 
 upDownCols :: Bool -> Pos -> Proto ()
@@ -600,12 +604,14 @@ saveStateAs state@ProtoState{..} = do
         'y' -> do
           BS.writeFile file (BS.concat $ LBS.toChunks (B.encode state))
           putStrLn $ "Saved to: " ++ file
-          return file
-        'n' -> return ""
+          --return file
+        'n' -> return ()
     False -> do
       BS.writeFile file (BS.concat $ LBS.toChunks (B.encode state))
       putStrLn $ "Saved to: " ++ file
-      return file
+      --return file
+
+  return file
 
 displayDirContents :: FilePath -> IO [(Int,FilePath)]
 displayDirContents dirPath = do
@@ -628,6 +634,14 @@ displayDirContents dirPath = do
    display (i,fp) = do
      putStrLn $ (show i) ++ ") " ++ fp 
 
+
+readInt :: IO Int
+readInt = do
+  num' <- getLine
+  let num :: Int
+      num = read num'
+  return num
+  
 loadState :: IO (ProtoState)
 loadState = do
   hd <- getHomeDirectory
@@ -635,8 +649,7 @@ loadState = do
   let dirPath = hd </> ".proto"
   putStrLn "Enter the number of the protocol file you wish to load: "
   zipList <- displayDirContents dirPath
-  num' <- getChar
-  let num = read [num']
+  num <- readInt
   let maxNum = length $ L.map fst zipList
   case or [(num > maxNum), (num < 1)] of
     True -> do putStrLn "invalid number. try again:"

@@ -17,9 +17,13 @@ import Data.Char
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.Binary hiding (get, put)
+import Data.List(sortBy)
 
 import ProtoState
 import ParseFile
+import qualified Adul as A
+import qualified ISpi as I
+import qualified AdulBuffer as AB
 
 type ProtoViewer = ReaderT ViewerParams Canvas
 data ViewerParams = ViewerParams
@@ -28,6 +32,10 @@ data ViewerParams = ViewerParams
                     , hSpace :: Double
                     , vSpace :: Double  
                     } deriving ()
+
+
+
+
 
 
 prompt :: String -> IO FilePath
@@ -42,9 +50,11 @@ commandPrompt = Main.prompt "Enter command: "
 
 main = do
   state_var <- atomically $ newTVar startState
-  blankCanvas {-{ events = ["mousedown"] }-} 3000 $ \ context -> do
+  let kp = pack "keypress"
+      kd = pack "keydown"
+  blankCanvas 3000 {events = [kd] } $ \ context -> do
       viewerThread <- forkIO $ viewer context state_var
-      execStateT (pcmain state_var) startState
+      execStateT (pcmain context state_var) startState
       --killThread viewerThread
       return ()
   
@@ -57,24 +67,47 @@ viewer context state_var = do
     let (w,h) = (width context, height context)
     clearRect (0,0,w,h)
     customDraw context state --numPs
+    
   atomically $ do
     state' <- readTVar state_var
     if state' == state then retry else return ()
   viewer context state_var
 
+
+
+
 --TODO make list of keywords:  ["save", "add",...] and make sure the user doesn't create a file of the same name as one of them.  OR do commands:  add filename, save filename, etc.
-pcmain :: TVar ProtoState -> Proto ()
-pcmain state_var = do
+pcmain :: DeviceContext -> TVar ProtoState -> Proto ()
+pcmain context state_var = do
   cmd' <- liftIO $ commandPrompt
   let cmd = Prelude.takeWhile (not . isSpace) cmd'
   case cmd of
-    "" -> do pcmain state_var
+    "" -> do pcmain context state_var
     "add" -> do ProtoState{..} <- get
                 liftIO $ putStrLn "Enter Messge to Add: "
                 m <- liftIO getLine
                 let md = parseLine m
                 addMessageAt (maxRow + 1) md
-                pcmain state_var
+                pcmain context state_var
+
+
+    "spi" -> do
+     -- runForOutput :: PiProcess ->IO (Either String Result )
+
+      --let eitherResult :: Either String I.Result
+      liftIO $ putStrLn $ "\nProtocol: " ++ (show A.inst_m2_shared) ++ "\n"
+      eitherResult <- liftIO $ I.runForOutput A.inst_m2_shared
+      case eitherResult of
+        Prelude.Left s -> liftIO $ putStrLn s
+        Prelude.Right (I.Result f g p) -> do
+          let mList' = map (AB.xx g) AB.mList
+              mds' = map AB.convertMessage mList'
+              mds = AB.sortPairs mds'
+          --liftIO $ putStrLn $ (show mds)
+          liftIO $ putStrLn $ "\n" ++ "Final result: " ++ (show f) ++ "\n"
+      
+          mapM_ AB.addMessageAt' mds
+          pcmain context state_var 
 
 
       
@@ -83,38 +116,40 @@ pcmain state_var = do
               liftIO $ atomically $
                 writeTVar state_var state
               --customDraw context
-              pcmain state_var
+              pcmain context state_var
     "q" -> do s <- liftIO $ commandPrompt
               liftIO $ putStrLn s
-              pcmain state_var
+              pcmain context state_var
               return ()
     "a" ->  do
-          addFromFile "testFile.txt" --fileName
-          pcmain state_var
-    "sa" -> do state@ProtoState{..} <- get
-               fn <- liftIO $ saveStateAs state
-               put ProtoState{savedAs = fn, editMode = False, ..}
+      addFromFile "testFile.txt" --fileName
+      pcmain context state_var
+    "sa" -> do --state@ProtoState{..} <- get
+               fn <- liftIO $ savePrompt
+               saveStateAs fn
+               --put ProtoState{savedAs = fn, editMode = False, ..}
                --put ProtoState{editMode = False}
-               pcmain state_var
+               pcmain context state_var
     "s" -> do state@ProtoState{..} <- get
               --let fn = savedAs state
               case (savedAs) of
                 "" -> do
-                  sa <- liftIO $ saveStateAs state
+                  fn <- liftIO $ savePrompt
+                  saveStateAs fn
                   --put startState
-                  put ProtoState{savedAs = sa, ..}
+                  --put ProtoState{savedAs = sa, ..}
                 _ -> do
                   liftIO $ do
                     BS.writeFile savedAs (BS.concat $ LBS.toChunks
-                                     (encode state))
+                                          (encode state))
                     
                     putStrLn $ "Saved: " ++ savedAs
                   put ProtoState{editMode = False, ..}
-              pcmain state_var
-                  
+              pcmain context state_var
+                
     "l" -> do newState <- liftIO loadState
               put newState
-              pcmain state_var
+              pcmain context state_var
     "e" -> do state@ProtoState{..} <- get
               case editMode of
                 True -> do
@@ -123,14 +158,14 @@ pcmain state_var = do
                 False -> do
                   liftIO $ putStrLn "Turning editMode ON"
                   put ProtoState{editMode = not editMode, ..}
-              pcmain state_var
+              pcmain context state_var
 
     "rm" -> do
       state@ProtoState{..} <- get
       liftIO $ putStrLn "Enter message number to remove: "
       num <- liftIO readInt
       liftIO $ putStrLn (show num)
-          
+        
       case or [(num > maxRow), (num < 1)] of
         True -> liftIO $ putStrLn "invalid mid"
         False -> do
@@ -138,20 +173,20 @@ pcmain state_var = do
           pruneOutboxes
           liftIO $ putStrLn $ "Removed message" ++ (show num)
 
-      pcmain state_var
+      pcmain context state_var
 
     "rp" -> do
       state@ProtoState{..} <- get
       liftIO $ putStrLn "Enter principal number to remove: "
       num <- liftIO readInt
-          
+             
       case or [(num > maxCol), (num < 1)] of
         True -> liftIO $ putStrLn "invalid pid"
         False -> do
           removePrincipalAt num
           liftIO $ putStrLn $ "Removed principal" ++ (show num)
 
-      pcmain state_var
+      pcmain context state_var
 
     "c" -> do
       liftIO $ putStrLn "Are you sure you want to clear?(y/n): "
@@ -163,14 +198,84 @@ pcmain state_var = do
         'n' -> return ()
 
 
-      pcmain state_var
-                  
-              
+      pcmain context state_var
+
+    "m" -> do
+      {-event <- liftIO $ wait context
+      liftIO $ print event
+      case eWhich event of
+        Nothing -> return ()
+        Just x -> liftIO $ print x
+      {-ProtoState{..} <- get
+      setMSlider (mSlider + 5) -}-}
+      liftIO $ flush context
+      mEventLoop context state_var
+      pcmain context state_var
+
+    "p" -> do
+      {-event <- liftIO $ wait context
+      liftIO $ print event
+      case eWhich event of
+        Nothing -> return ()
+        Just x -> liftIO $ print x
+      {-ProtoState{..} <- get
+      setMSlider (mSlider + 5) -}-}
+      liftIO $ flush context
+      pEventLoop context state_var
+      pcmain context state_var
+      
       
       
     _ -> do liftIO $ putStrLn "Unknown command.  Please retry: " 
-            pcmain state_var
- 
+            pcmain context state_var
+
+mEventLoop :: DeviceContext -> TVar ProtoState -> Proto ()
+mEventLoop context state_var = do
+  event <- liftIO $ wait context
+  liftIO $ print event
+  case eWhich event of
+        Nothing -> do liftIO $ putStrLn "DONT THINK I SHOULD GET HERE!!!"
+                      mEventLoop context state_var
+        Just x -> do
+          case x of
+            13 -> return ()
+            _ -> do
+              let adjust = case x of
+                    38 -> 1
+                    40 -> (-1)
+                    _ -> 0
+              ProtoState{..} <- get
+              setMSlider (mSlider + adjust)
+              state <- get
+              --liftIO $ print state
+              liftIO $ atomically $
+                writeTVar state_var state
+              mEventLoop context state_var
+
+pEventLoop :: DeviceContext -> TVar ProtoState -> Proto ()
+pEventLoop context state_var = do
+  event <- liftIO $ wait context
+  liftIO $ print event
+  case eWhich event of
+        Nothing -> do liftIO $ putStrLn "DONT THINK I SHOULD GET HERE!!!"
+                      pEventLoop context state_var
+        Just x -> do
+          case x of
+            13 -> return ()
+            _ -> do
+              let adjust = case x of
+                    38 -> 1
+                    40 -> (-1)
+                    _ -> 0
+              ProtoState{..} <- get
+              setPSlider (pSlider + adjust)
+              state <- get
+              --liftIO $ print state
+              liftIO $ atomically $
+                writeTVar state_var state
+              pEventLoop context state_var
+          
+          
 
 customDraw :: DeviceContext -> ProtoState -> Canvas ()
 customDraw context state@ProtoState{..}= do
@@ -184,6 +289,7 @@ customDraw context state@ProtoState{..}= do
         vp = ViewerParams context state hSpace vSpace
         principalNames = keys pMap
     runReaderT (mapM_ drawPrincipals principalNames) vp
+   
 
  where
    drawPrincipals :: Name -> ProtoViewer ()
@@ -228,7 +334,7 @@ customDraw context state@ProtoState{..}= do
              True -> dMax
              False -> diff
 
-           slider = pTextSizeSliders !! (x-1)
+           slider = pSlider --pTextSizeSliders !! (x-1)
            fontSize = pTextSizeSlider + slider +
                     ((rectH * (diff + (dMax*val))) / (dMax * dMax))
 
@@ -320,7 +426,7 @@ customDraw context state@ProtoState{..}= do
                xPos = hCenter --startX + (hSpace / 2)
                yPos = startY --startY + (vSpace / 2)
 
-           drawText fontSize mTextColor "center" "bottom"
+           drawText (fontSize + mSlider) mTextColor "center" "bottom"
                          (pack m) (xPos,yPos)
 
            let editRowCoor = case arrowDir of

@@ -79,6 +79,18 @@ instance B.Binary Principal where
 
 -- TODO: add messageIndex :: Map MessageId Slot
 --       AND change Outbox to:  type Outbox = [MessageId] where MessageId = Int
+
+
+setMSlider :: Double -> Proto ()
+setMSlider sizeIn = do
+  ProtoState{..} <- get
+  put ProtoState{mSlider = sizeIn, ..}
+
+setPSlider :: Double -> Proto ()
+setPSlider sizeIn = do
+  ProtoState{..} <- get
+  put ProtoState{pSlider = sizeIn, ..}
+
 data ProtoState = ProtoState
              { pMap        :: Map Name Principal
              , mMap          :: Map MessageId Message 
@@ -88,10 +100,12 @@ data ProtoState = ProtoState
              , fmids          :: [MessageId]
              , editMode          :: Bool
              , savedAs           :: FilePath
+             , mSlider    :: Double
+             , pSlider    :: Double
              } deriving (Eq, Show)
 
 instance B.Binary ProtoState where
-  put (ProtoState a b c d e f g h) = do
+  put (ProtoState a b c d e f g h i j) = do
     B.put a
     B.put b
     B.put c
@@ -100,6 +114,8 @@ instance B.Binary ProtoState where
     B.put f
     B.put g
     B.put h
+    B.put i
+    B.put j
   get = do
     a <- B.get
     b <- B.get
@@ -109,8 +125,12 @@ instance B.Binary ProtoState where
     f <- B.get
     g <- B.get
     h <- B.get
-    return $ ProtoState a b c d e f g h
+    i <- B.get
+    j <- B.get
+    return $ ProtoState a b c d e f g h i j
 
+startState :: ProtoState
+startState = ProtoState empty empty 0 0 0 [] False "" 0 0
 
 type Proto = StateT ProtoState IO
 data MaybeAfter = End
@@ -589,29 +609,36 @@ addMessages mds = do
   return ()
 
 
-saveStateAs :: ProtoState -> IO FilePath
-saveStateAs state@ProtoState{..} = do
-  hd <- getHomeDirectory
-  createDirectoryIfMissing True (hd </> ".proto")
-  fn <- savePrompt
+saveStateAs :: String -> Proto ()
+saveStateAs fn = do
+  --state@ProtoState{..} <- get
+  hd <- liftIO $ getHomeDirectory
+  liftIO $ createDirectoryIfMissing True (hd </> ".proto")
+  --fn <- savePrompt
   let file = hd </> ".proto" </> fn
-  exists <- doesFileExist file
+  exists <- liftIO $ doesFileExist file
   case exists of
     True -> do
-      putStrLn "This file already exists.  Do you wish to overwrite?(y,n)"
-      yn <- getChar
+      liftIO $ putStrLn "This file already exists.  Do you wish to overwrite?(y,n)"
+      yn <- liftIO $ getChar
       case yn of
         'y' -> do
-          BS.writeFile file (BS.concat $ LBS.toChunks (B.encode state))
-          putStrLn $ "Saved to: " ++ file
+          ProtoState{..} <- get
+          put ProtoState{savedAs = file, ..}
+          state <- get
+          liftIO $ BS.writeFile file (BS.concat $ LBS.toChunks (B.encode state))
+          liftIO $ putStrLn $ "Saved to: " ++ file
           --return file
         'n' -> return ()
     False -> do
-      BS.writeFile file (BS.concat $ LBS.toChunks (B.encode state))
-      putStrLn $ "Saved to: " ++ file
+      ProtoState{..} <- get
+      put ProtoState{savedAs = file, ..}
+      state <- get
+      liftIO $ BS.writeFile file (BS.concat $ LBS.toChunks (B.encode state))
+      liftIO $ putStrLn $ "Saved to: " ++ file
       --return file
 
-  return file
+  return ()
 
 displayDirContents :: FilePath -> IO [(Int,FilePath)]
 displayDirContents dirPath = do
@@ -652,7 +679,7 @@ loadState = do
   num <- readInt
   let maxNum = length $ L.map fst zipList
   case or [(num > maxNum), (num < 1)] of
-    True -> do putStrLn "invalid number. try again:"
+    True -> do putStrLn "invalid number. try again"
                return startState
     False -> do
       let file' = snd $ zipList !! (num - 1)
@@ -754,8 +781,7 @@ getNewNamesP mds = do
                  in res'
 -}  
 
-startState :: ProtoState
-startState = ProtoState empty empty 0 0 0 [] False ""
+
 
 
 

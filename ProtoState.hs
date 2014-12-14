@@ -91,6 +91,16 @@ setPSlider sizeIn = do
   ProtoState{..} <- get
   put ProtoState{pSlider = sizeIn, ..}
 
+setMSlider' :: MessageId -> Double -> Proto ()
+setMSlider' i sizeIn = do
+  ProtoState{..} <- get
+  put ProtoState{mSliderIndividuals = insert i sizeIn mSliderIndividuals, ..}
+
+setPSlider' :: Name -> Double -> Proto ()
+setPSlider' n sizeIn = do
+  ProtoState{..} <- get
+  put ProtoState{pSliderIndividuals = insert n sizeIn pSliderIndividuals, ..}
+
 data ProtoState = ProtoState
              { pMap        :: Map Name Principal
              , mMap          :: Map MessageId Message 
@@ -102,10 +112,12 @@ data ProtoState = ProtoState
              , savedAs           :: FilePath
              , mSlider    :: Double
              , pSlider    :: Double
+             , mSliderIndividuals :: Map MessageId Double
+             , pSliderIndividuals :: Map Name Double 
              } deriving (Eq, Show)
 
 instance B.Binary ProtoState where
-  put (ProtoState a b c d e f g h i j) = do
+  put (ProtoState a b c d e f g h i j k l) = do
     B.put a
     B.put b
     B.put c
@@ -116,6 +128,8 @@ instance B.Binary ProtoState where
     B.put h
     B.put i
     B.put j
+    B.put k
+    B.put l
   get = do
     a <- B.get
     b <- B.get
@@ -127,10 +141,12 @@ instance B.Binary ProtoState where
     h <- B.get
     i <- B.get
     j <- B.get
-    return $ ProtoState a b c d e f g h i j
+    k <- B.get
+    l <- B.get
+    return $ ProtoState a b c d e f g h i j k l
 
 startState :: ProtoState
-startState = ProtoState empty empty 0 0 0 [] False "" 0 0
+startState = ProtoState empty empty 0 0 0 [] False "" 0 0 empty empty
 
 type Proto = StateT ProtoState IO
 data MaybeAfter = End
@@ -404,6 +420,8 @@ addPrincipalAt posIn name = do
   upDownCols True posIn
   addToPMap (name, Principal posIn [])
   incrMaxCol
+  ProtoState{..} <- get
+  put ProtoState{pSliderIndividuals = insert name 0 pSliderIndividuals, ..}
 
 removePrincipalCalled :: Name -> Proto ()
 removePrincipalCalled name = do

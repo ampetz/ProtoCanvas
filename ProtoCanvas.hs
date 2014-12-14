@@ -6,7 +6,7 @@ import Graphics.Blank
 import Control.Monad.Trans
 import Control.Monad.Trans.State
 import Control.Monad.Trans.Reader
-import Data.Text hiding (map,maximum,minimum,length)
+import Data.Text hiding (map,maximum,minimum,length, find)
 import Control.Concurrent.STM
 import Control.Concurrent
 import Data.Map hiding (map)
@@ -17,7 +17,7 @@ import Data.Char
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.Binary hiding (get, put)
-import Data.List(sortBy)
+import Data.List(sortBy, find)
 
 import ProtoState
 import ParseFile
@@ -201,33 +201,71 @@ pcmain context state_var = do
       pcmain context state_var
 
     "m" -> do
-      {-event <- liftIO $ wait context
-      liftIO $ print event
-      case eWhich event of
-        Nothing -> return ()
-        Just x -> liftIO $ print x
-      {-ProtoState{..} <- get
-      setMSlider (mSlider + 5) -}-}
       liftIO $ flush context
       mEventLoop context state_var
       pcmain context state_var
 
     "p" -> do
-      {-event <- liftIO $ wait context
-      liftIO $ print event
-      case eWhich event of
-        Nothing -> return ()
-        Just x -> liftIO $ print x
-      {-ProtoState{..} <- get
-      setMSlider (mSlider + 5) -}-}
       liftIO $ flush context
       pEventLoop context state_var
       pcmain context state_var
+
+
+    "rmi" -> do
+      liftIO $ putStrLn "Enter message number to reset: " 
+      mid <- liftIO $ readInt
+      ProtoState {..} <- get
+      put ProtoState {mSliderIndividuals = insert mid 0 mSliderIndividuals, ..}
+      pcmain context state_var
+
+    "rpi" -> do
+      liftIO $ putStrLn "Enter principal number to reset: " 
+      pid <- liftIO $ readInt
+      ps <- getPrincipals
+      let list = toList ps
+          maybeP = find (remPred pid)  list
+          name = case maybeP of
+            Nothing -> "aa"
+            Just (n, _) -> n 
+
+      ProtoState {..} <- get
+      put ProtoState {pSliderIndividuals = insert name 0 pSliderIndividuals, ..}
+      pcmain context state_var
+     where
+        remPred :: Pos -> (Name,Principal) -> Bool
+        remPred cIn (_, Principal col' _) = cIn == col'
+       
+    "mi" -> do
+      liftIO $ flush context
+      liftIO $ putStrLn "Enter message number: " 
+      mid <- liftIO $ readInt
+      mEventLoop' context state_var mid
+      pcmain context state_var
+
+    
+    "pi" -> do
+      liftIO $ flush context
+      liftIO $ putStrLn "Enter principal number: " 
+      pid <- liftIO $ readInt
+      ps <- getPrincipals
+      let list = toList ps
+          maybeP = find (remPred pid)  list
+          name = case maybeP of
+            Nothing -> "aa"
+            Just (n, _) -> n 
+
+      pEventLoop' context state_var name
+      pcmain context state_var
+
+     where
+       remPred :: Pos -> (Name,Principal) -> Bool
+       remPred cIn (_, Principal col' _) = cIn == col'
       
       
       
     _ -> do liftIO $ putStrLn "Unknown command.  Please retry: " 
             pcmain context state_var
+
 
 mEventLoop :: DeviceContext -> TVar ProtoState -> Proto ()
 mEventLoop context state_var = do
@@ -251,7 +289,7 @@ mEventLoop context state_var = do
               liftIO $ atomically $
                 writeTVar state_var state
               mEventLoop context state_var
-
+              
 pEventLoop :: DeviceContext -> TVar ProtoState -> Proto ()
 pEventLoop context state_var = do
   event <- liftIO $ wait context
@@ -274,6 +312,60 @@ pEventLoop context state_var = do
               liftIO $ atomically $
                 writeTVar state_var state
               pEventLoop context state_var
+
+mEventLoop' :: DeviceContext -> TVar ProtoState -> MessageId -> Proto ()
+mEventLoop' context state_var mid = do
+  event <- liftIO $ wait context
+  liftIO $ print event
+  case eWhich event of
+        Nothing -> do liftIO $ putStrLn "DONT THINK I SHOULD GET HERE!!!"
+                      mEventLoop' context state_var mid
+        Just x -> do
+          case x of
+            13 -> return ()
+            _ -> do
+              let adjust = case x of
+                    38 -> 1
+                    40 -> (-1)
+                    _ -> 0
+              ProtoState{..} <- get
+              let maybeSliderI = lookup mid  mSliderIndividuals
+                  sliderI = case maybeSliderI of
+                    Nothing -> 0
+                    Just x -> x
+              setMSlider' mid (sliderI + adjust)
+              state <- get
+              --liftIO $ print state
+              liftIO $ atomically $
+                writeTVar state_var state
+              mEventLoop' context state_var mid
+
+pEventLoop' :: DeviceContext -> TVar ProtoState -> Name -> Proto ()
+pEventLoop' context state_var n = do
+  event <- liftIO $ wait context
+  liftIO $ print event
+  case eWhich event of
+        Nothing -> do liftIO $ putStrLn "DONT THINK I SHOULD GET HERE!!!"
+                      pEventLoop' context state_var n
+        Just x -> do
+          case x of
+            13 -> return ()
+            _ -> do
+              let adjust = case x of
+                    38 -> 1
+                    40 -> (-1)
+                    _ -> 0
+              ProtoState{..} <- get
+              let maybeSliderI = lookup n pSliderIndividuals
+                  sliderI = case maybeSliderI of
+                    Nothing -> 0
+                    Just x -> x
+              setPSlider' n (sliderI + adjust)
+              state <- get
+              --liftIO $ print state
+              liftIO $ atomically $
+                writeTVar state_var state
+              pEventLoop' context state_var n
           
           
 
@@ -335,7 +427,11 @@ customDraw context state@ProtoState{..}= do
              False -> diff
 
            slider = pSlider --pTextSizeSliders !! (x-1)
-           fontSize = pTextSizeSlider + slider +
+           maybeSliderI = lookup n pSliderIndividuals
+           sliderI = case maybeSliderI of
+             Nothing -> 0
+             Just x -> x
+           fontSize = slider + sliderI + 
                     ((rectH * (diff + (dMax*val))) / (dMax * dMax))
 
          
@@ -419,13 +515,19 @@ customDraw context state@ProtoState{..}= do
                  True -> dMax
                  False -> diff
                    
-               slider = pTextSizeSliders !! (x-1)
+               --slider = pTextSizeSliders !! (x-1)
+               maybeSliderI = lookup y' mSliderIndividuals
+               sliderI = case maybeSliderI of
+                 Nothing -> 0
+                 Just x -> x
                val = 1.04
-               fontSize = pTextSizeSlider + slider +
+               fontSize = mSlider + sliderI +
                           (((vSpace* (0.8)) * (diff + (dMax*val))) / (dMax * dMax))
                xPos = hCenter --startX + (hSpace / 2)
                yPos = startY --startY + (vSpace / 2)
 
+
+           
            drawText (fontSize + mSlider) mTextColor "center" "bottom"
                          (pack m) (xPos,yPos)
 
@@ -562,9 +664,9 @@ drawDashes maybeMove (dx,dy) strokeSize strokeColor = do
       MoveTo _ -> moveTo (mx,my)
       Stay -> return ()
     
-    let dashPartition = 30
+    let dashPartition = 100
         lineLen = dy - my
-        frac = lineLen / dashPartition / 2
+        frac = lineLen / dashPartition / 6
         incrs = [0..(dashPartition)]
         startYs' = map (*(lineLen / dashPartition)) incrs
         startYs = map (+my) startYs'

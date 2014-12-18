@@ -36,22 +36,48 @@ data ViewerParams = ViewerParams
                     } deriving ()
 
 
-{-getMessagesFor :: Name -> Proto [MessageD]
+filterMs :: [Name] -> [MessageD] -> [MessageD]
+filterMs ns mdsIn = Prelude.filter (f ns) mdsIn
+
+ where f :: [Name] -> MessageD -> Bool
+       f ns (MessageD fr t m) = and [fr `elem` ns, t `elem` ns]
+
+getMessagesFor :: Name -> Proto [(Pos,MessageD)]
 getMessagesFor name = do
   ProtoState{..} <- get
-  
-  let maybeP = lookup name pMap
-      case maybeP of
-        Nothing -> return []
-        Just (Principal c ob) -> return []
 
- where messageUp :: Name -> MessageId -> Proto MessageD
-       messageUp name mid = undefined {-do
-         ProtoState{..} <- get -} -}
+  let maybeP = lookup name pMap
+  case maybeP of
+    Nothing -> return []
+    Just (Principal c ob) -> do
+      result' <- mapM (messageUp name) ob
+      
+      return $ result'
+
+      
+changeEditMode :: Bool -> Proto ()
+changeEditMode b = do
+  ProtoState{..} <- get
+  put ProtoState{editMode = b, ..}
+  
+  
+messageUp :: Name -> MessageId -> Proto (Pos, MessageD)
+messageUp name mid = do
+  let def = (0,MessageD "" "" "")
+            
+  ms <- getMessages
+  let message = case lookup mid ms of
+        Nothing -> def
+        Just (Message row contents) -> case contents of
+          Send mt t -> (row, MessageD name t mt)
+          _ -> def
+         
+  return $ message
          
 
 addZoomed :: [Name] -> [MessageD] -> Proto ()
 addZoomed newPNames mds = do
+  put startState
   addPrincipalsAt 1 newPNames
   addMessagesAt 1 mds
 
@@ -133,6 +159,8 @@ pIndResetSliderCmd = "rpi"
 undoCmd = "u"
 redoCmd = "r"
 changePNameCmd = "cn"
+zoomCmd = "z"
+loadFileCmd = "aa"
 
 
 displayAndLoop' :: DeviceContext -> TVar ProtoState -> Proto ()
@@ -184,13 +212,13 @@ commands = map f xs
 
        xs =
          [
-           (helpCmd, "Help"),
+           {-(helpCmd, "Help"),-}
            (addMCmd, "Add a message"),
            (spiCmd, "Run spi"), 
-           (quitCmd, "Quit"),
+           {-(quitCmd, "Quit"),-}
            (addFileCmd, "Add from file"),
-           (saveCmd, "Save"),
-           (saveAsCmd, "Save As"), 
+           {-(saveCmd, "Save"),
+           (saveAsCmd, "Save As"),-} 
            (loadCmd, "Load"), 
            (editModeCmd, "Turn edit mode on/off"), 
            (removeMCmd, "Remove a message"), 
@@ -204,9 +232,14 @@ commands = map f xs
            (pIndResetSliderCmd, "Individual Principal size slider"),
            (undoCmd, "Undo the previous change"),
            (redoCmd, "Redo the previous undo"),
-           (changePNameCmd, "Change p name")
+           (changePNameCmd, "Change p name"),
+           (zoomCmd, "zoom to principals"),
+           (displayCmd, "Append from file"),
+           (loadFileCmd, "Load from a file")
            ]
-           
+
+sortX :: (Pos, MessageD) -> (Pos, MessageD) -> Ordering
+sortX (x,_) (y,_) = compare x y
   
 
 --TODO make list of keywords:  ["save", "add",...] and make sure the user doesn't create a file of the same name as one of them.  OR do commands:  add filename, save filename, etc.
@@ -220,6 +253,26 @@ pcmain context state_var (undoList, redoList) = do
   case cmd of
     x | x == "" -> do pcmain context state_var (undoList, redoList)
 
+    x | x == zoomCmd -> do
+      liftIO $ putStrLn "Enter principal numbers(1,2,...): " 
+      s <- liftIO $ getLine
+      let names' = commaParse s
+      names <- mapM colToName names'
+
+      
+      
+      messgs'' <- mapM getMessagesFor names
+      
+      
+      let messgs' = Prelude.concat messgs''
+          result' = sortBy sortX messgs'
+          mX = map snd result'
+          messgs = filterMs names mX
+          
+      liftIO $ putStrLn $ show messgs
+      addZoomed names messgs
+
+      
     x | x == changePNameCmd -> do
       liftIO $ putStrLn "Enter principal number: " 
       col <- liftIO $ readInt
@@ -243,6 +296,7 @@ pcmain context state_var (undoList, redoList) = do
               newUndoList = tail undoList
               newRedoList = currentState : redoList
           put newState
+          changeEditMode (editMode currentState)
           displayAndLoop context stateBefore state_var True (newUndoList,newRedoList)
 
     x | x == redoCmd -> do
@@ -256,6 +310,7 @@ pcmain context state_var (undoList, redoList) = do
               newRedoList = tail redoList
               newUndoList = currentState : undoList
           put newState
+          changeEditMode (editMode currentState)
           displayAndLoop context stateBefore state_var True (newUndoList,newRedoList)
       
 
@@ -267,33 +322,59 @@ pcmain context state_var (undoList, redoList) = do
       liftIO $ putStrLn "Enter Messge to Add: "
       m <- liftIO getLine
       let md = parseLine m
-      addMessageAt (maxRow + 1) md
+      liftIO $ putStrLn "Enter position(0 for end): "
+      i <- liftIO readInt
+      case i of
+        0 -> addMessageAt (maxRow + 1) md
+        n -> addMessageAt (n) md
 
       | x == spiCmd -> do
      -- runForOutput :: PiProcess ->IO (Either String Result )
 
       --let eitherResult :: Either String I.Result
-      let abc = SE.inst_armored --A.inst_m2_shared
+
+      liftIO $ putStrLn "which?:  "
+      liftIO $ putStrLn "1) inst_armored  "
+      liftIO $ putStrLn "2) inst_m2_shared  "
+      i <- liftIO readInt
+
+      
+      let abc = case i of
+            1 -> SE.inst_armored
+            2 -> A.inst_m2_shared
       liftIO $ putStrLn $ "\nProtocol: " ++ (show abc) ++ "\n"
       eitherResult <- liftIO $ I.runForOutput abc
       case eitherResult of
         Prelude.Left s -> liftIO $ putStrLn s
         Prelude.Right (I.Result f g p) -> do
-          let mList' = map (AB.xx g) AB.mList
+          let mList' = map (AB.xx g) (AB.mList abc)
               mds' = map AB.convertMessage mList'
               mds = AB.sortPairs mds'
           --liftIO $ putStrLn $ (show mds)
           liftIO $ putStrLn $ "\n" ++ "Final result: " ++ (show f) ++ "\n"
       
           mapM_ AB.addMessageAt' mds
+          --mapM_ addMessagesAt 0 mds
           
-      {-| x == displayCmd ->
-      displayCanvas state_var -}
+      | x == displayCmd -> do
+      ProtoState{..} <- get
+      liftIO $ putStrLn "Enter File to add: "
+      m <- liftIO getLine
+      mds <- liftIO $ fromFile m
+      addMessagesAt (maxRow + 1) mds
+           
+      
+      --displayCanvas state_var 
       
       | x == quitCmd -> do
       s <- liftIO $ commandPrompt
       liftIO $ putStrLn s
 
+      | x == loadFileCmd -> do
+      liftIO $ putStrLn "Enter File to load: "
+      m <- liftIO getLine
+      addFromFile m
+      
       | x == addFileCmd ->  do
       addFromFile "testFile.txt" --fileName
 
@@ -407,14 +488,14 @@ pcmain context state_var (undoList, redoList) = do
       liftIO $ putStrLn "Unknown command. Please retry: " 
 
 
-  let undoRedoBool = cmd `elem` [undoCmd, redoCmd, saveCmd, saveAsCmd, loadCmd]
+  let undoRedoBool = cmd `elem` [undoCmd, redoCmd, saveCmd, saveAsCmd, loadCmd, editModeCmd]
   displayAndLoop context stateBefore state_var undoRedoBool (undoList, redoList)
 
 
 mEventLoop :: DeviceContext -> TVar ProtoState -> Proto ()
 mEventLoop context state_var = do
   event <- liftIO $ wait context
-  liftIO $ print event
+  --liftIO $ print event
   case eWhich event of
         Nothing -> do liftIO $ putStrLn "DONT THINK I SHOULD GET HERE!!!"
                       mEventLoop context state_var
@@ -437,7 +518,7 @@ mEventLoop context state_var = do
 pEventLoop :: DeviceContext -> TVar ProtoState -> Proto ()
 pEventLoop context state_var = do
   event <- liftIO $ wait context
-  liftIO $ print event
+  --liftIO $ print event
   case eWhich event of
         Nothing -> do liftIO $ putStrLn "DONT THINK I SHOULD GET HERE!!!"
                       pEventLoop context state_var
@@ -460,7 +541,7 @@ pEventLoop context state_var = do
 mEventLoop' :: DeviceContext -> TVar ProtoState -> MessageId -> Proto ()
 mEventLoop' context state_var mid = do
   event <- liftIO $ wait context
-  liftIO $ print event
+  --liftIO $ print event
   case eWhich event of
         Nothing -> do liftIO $ putStrLn "DONT THINK I SHOULD GET HERE!!!"
                       mEventLoop' context state_var mid
@@ -487,7 +568,7 @@ mEventLoop' context state_var mid = do
 pEventLoop' :: DeviceContext -> TVar ProtoState -> Name -> Proto ()
 pEventLoop' context state_var n = do
   event <- liftIO $ wait context
-  liftIO $ print event
+  --liftIO $ print event
   case eWhich event of
         Nothing -> do liftIO $ putStrLn "DONT THINK I SHOULD GET HERE!!!"
                       pEventLoop' context state_var n

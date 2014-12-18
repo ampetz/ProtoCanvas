@@ -20,7 +20,7 @@ convertMessage :: A.Message -> (Pos,MessageD)
 convertMessage (A.Message pos from to pi) =
   (pos, MessageD from to (show pi))
 
-mList = A.toMessages SE.inst_armored [] --A.inst_m2_shared []
+mList x = A.toMessages x [] --A.inst_m2_shared []
 
 sortPairs :: [(Pos,MessageD)] -> [(Pos,MessageD)]
 sortPairs ps = sortBy pred ps

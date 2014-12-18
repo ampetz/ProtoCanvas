@@ -2,6 +2,7 @@ module ParseFile where
 
 import System.IO
 import Data.Char
+import Data.List.Split
 
 --type Name = String
 data MessageD = MessageD
@@ -18,6 +19,20 @@ main = do
 
  where file = "testFile.txt"
 -}
+
+commaParse :: String -> [Int]
+commaParse s = let xs' = splitOneOf "," s in
+  map read xs'
+
+{-
+  where f :: ([Int], String) -> String -> ([Int],String)
+        f (xs,  s =
+          let num' = takeWhile (not . comma) s
+              num = read num' in
+          xs ++ [num]
+
+        comma :: Char -> Bool
+        comma x = x == ',' -}
 
 fromFile :: FilePath -> IO [MessageD]
 fromFile fp = do

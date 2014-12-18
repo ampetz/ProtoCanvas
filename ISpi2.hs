@@ -5,16 +5,24 @@ import SpiTypeChecker
 import SpiTypes
 import Control.Concurrent.STM
 import Control.Concurrent.STM.TMVar
-import Control.Monad.State.Lazy
+import Control.Monad.State.Strict
 import Control.Monad
 import Control.Concurrent.MVar
 import Control.Concurrent
 import Data.List
+import Data.IORef
+
+canReadOwn = False
+canReReceive= False
+canBroadcast = True
+
+
 
 runReduce :: PiProcess ->IO (PiProcess, MyState)
 runReduce piproc = do
                     myemtpyTMVar <- newTMVarIO (emptyPiMVarPairList)
-                    let s0 = MyState {gamma =[], globalChans= myemtpyTMVar}
+                    starterID <- newMVar (0 :: Int)
+                    let s0 = MyState {gamma =[], globalChans= myemtpyTMVar, usedIDs = [], globID = starterID}
                     runStateT (reduce piproc) s0
 
 reduce :: PiProcess -> MyStateTMonad PiProcess
@@ -49,42 +57,57 @@ reduce (Composition proc1 proc2)  = do
                                      
                                      res1 <- liftIO $ takeMVar mv1
                                      res2 <- liftIO $ takeMVar mv2
-                                     (MyState x y) <- get
+                                     (MyState x y ls m) <- get
                                      let res1gamma = gamma (snd res1)
                                      let res2gamma = gamma (snd res2)
-                                     put (MyState (union res1gamma res2gamma) y)
+                                     put (MyState (union res1gamma res2gamma) y ls m)
                                      return (Composition (fst res1) (fst res2))
 reduce (Output pi1' pi2' piproc)   = do
                                       pi1 <- subIfVar pi1'
                                       pi2 <- subIfVar pi2'
-                                      (MyState gam tmvar) <- get
-                                      --tmvarContents :: [(Pi,MVar Pi)]
+                                      (MyState gam tmvar ls m) <- get
+                                      --tmvarContents :: [(Pi,MVar Pi,Int)]
                                       tmvarContents <- liftIO $ atomically $ takeTMVar tmvar
                                       case findMVar pi1 tmvarContents of
                                         Nothing -> do
-                                                    mvr <-liftIO $ newMVar pi2
+                                                    mID <- getMessageID
+                                                    mvr <-liftIO $ newMVar (pi2,mID)
                                                     let tmvarContents' = (pi1,mvr):tmvarContents
+                                                    if canReadOwn then return ()
+                                                                      else do
+                                                                            let ls' = mID:ls
+                                                                            liftIO $ putStrLn ("new mess ID:" ++ (show mID))
+                                                                            put (MyState gam tmvar ls' m)
                                                     liftIO $ atomically $ putTMVar tmvar tmvarContents'
                                         Just pimvar -> do
                                                         maybemvrC <- liftIO $ tryTakeMVar pimvar --leaves the MVar empty no matter what.
-                                                        liftIO $ putMVar pimvar pi2
-                                                        liftIO $ atomically $ putTMVar tmvar tmvarContents                                               
+                                                        replacementID <- getMessageID
+                                                        liftIO $ putMVar pimvar (pi2, replacementID)
+                                                        if canReadOwn then return ()
+                                                                      else do
+                                                                            let ls' = replacementID:ls
+                                                                            liftIO $ putStrLn ("ID:" ++ (show replacementID))
+                                                                            put (MyState gam tmvar ls' m)
+                                                        liftIO $ atomically $ putTMVar tmvar tmvarContents
+                                                        
                                       --at this point we have put the message out there and can continue
                                       --put the TMVar back.
-                                      liftIO $ putStrLn ("OUTPUT ON: " ++ (show pi1) ++ "::" ++ (show pi2))
+                                      --liftIO $ putStrLn ("OUTPUT ON: " ++ (show pi1) ++ "::" ++ (show pi2))
                                       --liftIO yield
                                       reduce piproc
 reduce (OrderedOutput _ from to pi piproc) = reduce (Output (Name ("C_" ++ (if from < to then (from ++ to) else (to ++ from)))) pi piproc)
 reduce (Input pi1' pi2 piproc)   = do 
                                     pi1 <- subIfVar pi1'
-                                    (MyState gam tmvarP) <- get
+                                    (MyState gam tmvarP ls m) <- get
                                     tmvarC <- liftIO $ atomically $ takeTMVar tmvarP
                                   --tmvarC :: [(Pi,MVar Pi)]
+                                    liftIO $ putStrLn ("IN:" ++ (show (Input pi1 pi2 piproc)))
                                     case findMVar pi1 tmvarC of
                                         Nothing -> do
                                                     mvr <-liftIO $ newEmptyMVar
                                                     let tmvarContents' = (pi1,mvr):tmvarC
                                                     liftIO $ atomically $ putTMVar tmvarP tmvarContents'
+                                                    liftIO $ yield
                                         Just mvr -> do
                                                         liftIO $ atomically $ putTMVar tmvarP tmvarC
                                     --whether or not I had to put an emptyMVar there, it's there and TMVAR can be taken
@@ -92,15 +115,22 @@ reduce (Input pi1' pi2 piproc)   = do
                                     case findMVar pi1 tmvarC' of
                                         Nothing     -> liftIO $ putStrLn "This should never happen ever. ever ever."
                                         Just pimvar -> do 
-                                                        inputMessage <-liftIO $ takeMVar pimvar 
-                                                        (MyState gam tmvP) <- get
-                                                        let gam' = (VarBind (pi2, inputMessage)):gam
-                                                        put (MyState gam' tmvP)
-                                                        liftIO $ putMVar pimvar inputMessage
+                                                        inputMessage <- if canReReceive then liftIO $ takeMVar pimvar
+                                                                                        else waitForFresh pimvar 0
+                                                        --inputMessage <-liftIO $ takeMVar pimvar
+                                                        let ls' = (snd inputMessage) : ls
+                                                        let piMess = fst inputMessage
+                                                        (MyState gam tmvP ls m) <- get
+                                                        let gam' = (VarBind (pi2, piMess)):gam
+                                                        put (MyState gam' tmvP ls' m)
+                                                        if canBroadcast then do liftIO $ tryPutMVar pimvar inputMessage
+                                                                                return ()
+                                                                        else return ()
+                                                        
                                     reduce piproc                 
 reduce (Restriction pi1 piproc)  = do
-                              (MyState g globs) <- get                                                                 
-                              put (MyState {gamma =(Restricted pi1 :g), globalChans=globs})                              
+                              (MyState g globs ls m) <- get                                                                 
+                              put (MyState {gamma =(Restricted pi1 :g), globalChans=globs, globID = m, usedIDs = ls})                              
                               reduce piproc 
 reduce (Match pi1' pi2' piproc)    = do
                               pi1 <- subIfVar pi1'
@@ -139,22 +169,42 @@ reduce (Value pi') = do
                      pi <- subIfVar pi'
                      return (Value pi)
 reduce (CaseDecrypt encrypted' var key' piproc) = do
+                                                   --liftIO $ putStrLn (show (CaseDecrypt encrypted' var key'
                                                    encrypted <- subIfVar encrypted'
                                                    key <- subIfVar key'
                                                    case encrypted of
                                                     (Encryption mess keyin) -> if keyin == key then do
-                                                       -- s <- get
-                                                       -- put ((VarBind (var, mess)):(fst s),snd s) -- update the state to have this variable
+                                                        (MyState gam tvar ls mv) <- get
+                                                        let gam' = (VarBind (var, mess)): gam 
+                                                        put (MyState gam' tvar ls mv) -- update the state to have this variable
                                                         reduce piproc
                                                          else return Stuck
                                                     (_) -> return Stuck
-                                                    
-                                                    
-isPresent ::  Pi -> [(Pi,MVar Pi)] -> Bool
+
+waitForFresh :: (MVar (Pi,Int)) ->Int -> MyStateTMonad (Pi,Int)
+waitForFresh mvarP counter = do
+                        x@(mess,i) <- liftIO $ takeMVar mvarP
+                        (MyState gam glob ls m) <- get
+                        if elem i ls then do 
+                                            liftIO $ tryPutMVar mvarP x
+                                            liftIO yield --a little nudge in the right direction
+                                            if counter> 1000000 then error "looping forever waiting for new message"
+                                                                else waitForFresh mvarP (counter +1)
+                                     else do 
+                                             liftIO $ tryPutMVar mvarP x 
+                                             return x 
+getMessageID :: MyStateTMonad Int
+getMessageID = do
+                (MyState g tvar idLS mvidP) <- get
+                mvid <- liftIO $ takeMVar mvidP
+                liftIO $ putMVar mvidP (mvid + 1)
+                return mvid
+                
+isPresent ::  Pi -> [(Pi,MVar (Pi,Int))] -> Bool
 isPresent _ []  = False
 isPresent t (x:xs) = if t == (fst x) then True else isPresent t xs
 
-findMVar ::  Pi -> [(Pi,MVar Pi)] -> Maybe (MVar Pi) 
+findMVar ::  Pi -> [(Pi,MVar (Pi,Int))] -> Maybe (MVar (Pi,Int)) 
 findMVar pi1 [] = Nothing
 findMVar pi1 (x:xs) = if pi1 == (fst x) then Just (snd x)
                                         else findMVar pi1 xs
@@ -169,7 +219,8 @@ subIfVar pi = do
                     -- Nothing -> return pi
                     -- Just val -> return val
 subIfVar' :: Pi -> Gamma -> Pi
-subIfVar' (Pair x y) gamma = Pair (subIfVar' x gamma) (subIfVar' y gamma) --added this. def needed.
+subIfVar' (Pair x y) gam = Pair (subIfVar' x gam) (subIfVar' y gam) --added this. def needed.
+subIfVar' (Encryption pi1 pi2) gam = Encryption (subIfVar' pi1 gam) (subIfVar' pi2 gam) -- added this. def needed as well.
 subIfVar' pi gamma = case myLookup pi gamma of
                       Nothing -> pi
                       Just val -> val
@@ -179,6 +230,14 @@ myLookup pi []     = Nothing
 myLookup pi (t:xs) = case t of
                           VarBind (x,y) -> if x == pi then return y else myLookup pi xs 
                           _ -> myLookup pi xs                                                    
+
+
+fst3 :: (a,b,c) -> a 
+fst3 (a,_,_) = a
+snd3 :: (a,b,c) -> b 
+snd3 (_,b,_) = b                           
+thd :: (a,b,c) -> c
+thd (_,_,c) = c
                           
 
 typeandReduce :: PiProcess -> IO () --Either String PiProcess

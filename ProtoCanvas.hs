@@ -216,7 +216,7 @@ commands = map f xs
            (addMCmd, "Add a message"),
            (spiCmd, "Run spi"), 
            {-(quitCmd, "Quit"),-}
-           (addFileCmd, "Add from file"),
+           (addFileCmd, "Add from testFile.txt"),
            {-(saveCmd, "Save"),
            (saveAsCmd, "Save As"),-} 
            (loadCmd, "Load"), 

@@ -83,13 +83,14 @@ armored_a = OrderedOutput 1 "a" "b" (Name "InitRequestTOAttester")
 --attester
 armored_b = Input (Name "C_ab") (Var "ReqFromApp") 
             (OrderedOutput 2 "b" "c" (Name "b + AIK") 
-            (Input (Name "C_bc") (Var "CAResponseToAtt") 
+            (Input (Name "C_bc") (Var "caCert")
+            (CaseDecrypt (Var "caCert") (Var "decryptedcaCert") (Name "BSECRETKEY")
             (OrderedOutput 4 "b" "m" (Name "pleasegiveMeas1") 
             (Input (Name "C_bm") (Var "measurementFromMeas") 
-            (OrderedOutput 6 "b" "a" (Var "CAResponseToAtt") 
-            (OrderedOutput 7 "b" "a" (Var "measurementFromMeas") (Value (Pair (Var "ReqFromApp") (Pair (Var "CAResponseToAtt") (Var "measurementFromMeas"))))))))))
+            (OrderedOutput 6 "b" "a" (Var "decryptedcaCert") 
+            (OrderedOutput 7 "b" "a" (Var "measurementFromMeas") (Value (Pair (Var "ReqFromApp") (Pair (Var "decryptedcaCert") (Var "measurementFromMeas")))))))))))
 armored_c = Input (Name "C_bc") (Var "reqToCA")
-            (OrderedOutput 3 "c" "b" (Name "pretend this is a CA cert") (Value (Var "reqToCA")))
+            (OrderedOutput 3 "c" "b" (Encryption (Name "CA Cert (Encrypted!)") (Name "BSECRETKEY")) (Value (Var "reqToCA")))
 armored_m = Input (Name "C_bm") (Var "desE")
             (OrderedOutput 5 "m" "b" (Name "pretend this is evidence") (Value (Var "desE")))
 inst_armored =Restriction (Name "C_bm")
@@ -109,7 +110,7 @@ examplewhyBroken_b = Let ((Var "1"),(Var "2")) (Pair (Name "name1") (Name "name2
                     (Input (Name "C_ab") (Var "x") 
                     (Output (Name "C_ab") (Pair (Var "x") (Var "x")) 
                      Nil))))))
-inst_broken = Restriction (Name "C_ab") (Composition examplewhyBroken_b examplewhyBroken_a)
+inst_broken = Restriction (Name "C_ab") (Composition examplewhyBroken_a examplewhyBroken_b)
 
 examplewhyBroken_a' = Output (Name "C_ab") (Name "Hello") 
                     (Input (Name "C_ba") (Var "x") 
@@ -141,5 +142,9 @@ broadcast_b = Input (Name "C") (Var "x")
 broadcast_c = Input (Name "C") (Var "x") 
                     (Output (Name "C") (Pair (Name "C got:") (Var "x")) --(Pair (Var "x") (Var "x"))
                     Nil )
-inst_broadcast = Composition broadcast_a (Composition broadcast_b broadcast_c)                    
-               
+inst_broadcast = Composition broadcast_a (Composition broadcast_b broadcast_c)
+
+b_a = Output (Name "c") (Name "mess") Nil
+b_b = Input (Name "c") (Var "b") Nil
+b_c = Input (Name "c") (Var "c") Nil
+b_inst = Composition b_a (Composition b_b b_c)

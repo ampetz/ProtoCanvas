@@ -1,0 +1,4 @@
+A,B: M, A, B, {Na, M, A, B}Kas
+B,S: M, A, B, {Na, M, A, B}Kas, {Nb, M, A, B}Kbs
+S,B: M, {Na, Kab}Kas {Nb, Kab}Kbs
+B,A: M, {Na, Kab}Kas

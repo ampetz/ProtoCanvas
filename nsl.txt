@@ -1,3 +1,5 @@
+S,B: KA
+S,A: KB
 A,B: {Na A}KB
 B,A: {Na Nb B}KA
 A,B: {Nb}KB

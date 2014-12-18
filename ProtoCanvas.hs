@@ -6,10 +6,10 @@ import Graphics.Blank
 import Control.Monad.Trans
 import Control.Monad.Trans.State
 import Control.Monad.Trans.Reader
-import Data.Text hiding (map,maximum,minimum,length, find)
+import Data.Text hiding (map,maximum,minimum,length, find, replicate, head, tail, null)
 import Control.Concurrent.STM
 import Control.Concurrent
-import Data.Map hiding (map)
+import Data.Map hiding (map, null)
 import Data.String
 import Data.Char
 --import System.IO
@@ -18,6 +18,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.Binary hiding (get, put)
 import Data.List(sortBy, find)
+import System.IO
 
 import ProtoState
 import ParseFile
@@ -34,17 +35,29 @@ data ViewerParams = ViewerParams
                     } deriving ()
 
 
+colToName :: Pos -> Proto Name
+colToName pos = do
+  ps <- getPrincipals
+  let list = toList ps
+      maybeP = find (remPred pos)  list
+      name = case maybeP of
+        Nothing -> ""
+        Just (n, _) -> n
+  return name
+ where
+   remPred :: Pos -> (Name,Principal) -> Bool
+   remPred cIn (_, Principal col' _) = cIn == col'
+          
 
-
-
-
-prompt :: String -> IO FilePath
-prompt s = do
-  putStrLn s
-  command <- getLine
+linePrompt :: String -> IO FilePath
+linePrompt s = do
+  putStr s
+  --hFlush stdout
+  command' <- getLine
+  let command = Prelude.takeWhile (not . isSpace) command'
   return command
 
-commandPrompt = Main.prompt "Enter command: "
+commandPrompt = linePrompt "Enter command(h for list of commands): "
 --savePrompt = prompt "Enter name of file to save to: "
 
 
@@ -54,7 +67,7 @@ main = do
       kd = pack "keydown"
   blankCanvas 3000 {events = [kd] } $ \ context -> do
       viewerThread <- forkIO $ viewer context state_var
-      execStateT (pcmain context state_var) startState
+      execStateT (pcmain context state_var ([], [])) startState
       --killThread viewerThread
       return ()
   
@@ -74,24 +87,155 @@ viewer context state_var = do
   viewer context state_var
 
 
+data Cmd = Cmd {cmd :: String, descr :: String}
 
+helpCmd :: String
+helpCmd = "h"
+addMCmd :: String
+addMCmd = "add"
+spiCmd = "spi"
+displayCmd = "d"
+quitCmd = "q"
+addFileCmd = "a"
+saveCmd = "s"
+saveAsCmd = "sa"
+loadCmd = "l"
+editModeCmd = "e"
+removeMCmd = "rm"
+removePCmd = "rp"
+clearCmd = "c"
+mSliderCmd = "m"
+pSliderCmd = "p"
+pIndSliderCmd = "pi"
+mIndSliderCmd = "mi"
+mIndResetSliderCmd = "rmi"
+pIndResetSliderCmd = "rpi"
+undoCmd = "u"
+redoCmd = "r"
+
+
+displayAndLoop' :: DeviceContext -> TVar ProtoState -> Proto ()
+displayAndLoop' c s = do
+  displayCanvas s
+  pcmain c s ([],[])
+
+displayAndLoop :: DeviceContext -> ProtoState -> TVar ProtoState -> Bool
+                  -> ([ProtoState],[ProtoState]) -> Proto ()
+displayAndLoop c stateBefore s undoRedo l@(undoList, redoList) = do
+  displayCanvas s
+  state <- get
+  let newLists = case stateBefore == state of
+        True -> l
+        False -> case undoRedo of True -> l
+                                  False -> (stateBefore:undoList, redoList)
+  pcmain c s newLists
+
+
+
+displayCanvas :: TVar ProtoState -> Proto ()
+displayCanvas state_var = do
+  state <- get
+  liftIO $ do
+    --print state
+    atomically $ writeTVar state_var state
+
+helpCmdDisplay :: IO ()
+helpCmdDisplay = do
+  let sorted = sortBy cmdSort commands
+      maxL = maximum $ map length (map cmd sorted)
+  putStrLn "Commands"
+  putStrLn "__________________________________________"
+  mapM_ (f maxL) sorted
+  putStrLn "\n"
+  
+ where cmdSort :: (Cmd -> Cmd -> Ordering)
+       cmdSort (Cmd a _) (Cmd b _) = compare a b
+
+       f :: Int -> Cmd -> IO ()
+       f i (Cmd c d) = let extra = (i - length c) in
+         putStrLn $ c ++ (replicate (i+extra) ' ') ++ "-" ++ d
+
+
+commands :: [Cmd]
+commands = map f xs
+ where f :: (String,String) -> Cmd
+       f (s,d) = Cmd s d
+
+       xs =
+         [
+           (helpCmd, "Help"),
+           (addMCmd, "Add a message"),
+           (spiCmd, "Run spi"), 
+           (quitCmd, "Quit"),
+           (addFileCmd, "Add from file"),
+           (saveCmd, "Save"),
+           (saveAsCmd, "Save As"), 
+           (loadCmd, "Load"), 
+           (editModeCmd, "Turn edit mode on/off"), 
+           (removeMCmd, "Remove a message"), 
+           (removePCmd, "Remove a principal"), 
+           (clearCmd, "Clear"), 
+           (mSliderCmd, "Overall Message size slider"), 
+           (pSliderCmd, "Overall Principal size slider"), 
+           (pIndSliderCmd, "Individual Principal size slider"), 
+           (mIndSliderCmd, "Individual Message size slider"), 
+           (mIndResetSliderCmd, "Reset Individual Message size slider"), 
+           (pIndResetSliderCmd, "Individual Principal size slider"),
+           (undoCmd, "Undo the previous change"),
+           (redoCmd, "Redo the previous undo")
+           ]
+           
+  
 
 --TODO make list of keywords:  ["save", "add",...] and make sure the user doesn't create a file of the same name as one of them.  OR do commands:  add filename, save filename, etc.
-pcmain :: DeviceContext -> TVar ProtoState -> Proto ()
-pcmain context state_var = do
-  cmd' <- liftIO $ commandPrompt
-  let cmd = Prelude.takeWhile (not . isSpace) cmd'
+pcmain :: DeviceContext -> TVar ProtoState -> ([ProtoState],[ProtoState])
+          -> Proto ()
+pcmain context state_var (undoList, redoList) = do
+  liftIO $ hSetBuffering stdout NoBuffering
+  cmd <- liftIO $ commandPrompt
+
+  stateBefore <- get
   case cmd of
-    "" -> do pcmain context state_var
-    "add" -> do ProtoState{..} <- get
-                liftIO $ putStrLn "Enter Messge to Add: "
-                m <- liftIO getLine
-                let md = parseLine m
-                addMessageAt (maxRow + 1) md
-                pcmain context state_var
+    x | x == "" -> do pcmain context state_var (undoList, redoList)
 
+    x | x == undoCmd -> do
+      case null undoList of
+        True -> do
+          liftIO $ putStrLn "Nothing to undo"
+          return ()
+        False -> do
+          currentState <- get
+          let newState = head undoList
+              newUndoList = tail undoList
+              newRedoList = currentState : redoList
+          put newState
+          displayAndLoop context stateBefore state_var True (newUndoList,newRedoList)
 
-    "spi" -> do
+    x | x == redoCmd -> do
+      case null redoList of
+        True -> do
+          liftIO $ putStrLn "Nothing to redo"
+          return ()
+        False -> do
+          currentState <- get
+          let newState = head redoList
+              newRedoList = tail redoList
+              newUndoList = currentState : undoList
+          put newState
+          displayAndLoop context stateBefore state_var True (newUndoList,newRedoList)
+      
+
+    x | x == helpCmd -> do
+        liftIO $ helpCmdDisplay 
+
+      | x == addMCmd -> do
+      ProtoState{..} <- get
+      liftIO $ putStrLn "Enter Messge to Add: "
+      m <- liftIO getLine
+      let md = parseLine m
+      addMessageAt (maxRow + 1) md
+
+      | x == spiCmd -> do
      -- runForOutput :: PiProcess ->IO (Either String Result )
 
       --let eitherResult :: Either String I.Result
@@ -107,60 +251,53 @@ pcmain context state_var = do
           liftIO $ putStrLn $ "\n" ++ "Final result: " ++ (show f) ++ "\n"
       
           mapM_ AB.addMessageAt' mds
-          pcmain context state_var 
-
-
+          
+      {-| x == displayCmd ->
+      displayCanvas state_var -}
       
-    "d" -> do state <- get
-              liftIO $ print state
-              liftIO $ atomically $
-                writeTVar state_var state
-              --customDraw context
-              pcmain context state_var
-    "q" -> do s <- liftIO $ commandPrompt
-              liftIO $ putStrLn s
-              pcmain context state_var
-              return ()
-    "a" ->  do
+      | x == quitCmd -> do
+      s <- liftIO $ commandPrompt
+      liftIO $ putStrLn s
+
+      | x == addFileCmd ->  do
       addFromFile "testFile.txt" --fileName
-      pcmain context state_var
-    "sa" -> do --state@ProtoState{..} <- get
+
+      | x == saveAsCmd -> do --state@ProtoState{..} <- get
                fn <- liftIO $ savePrompt
                saveStateAs fn
                --put ProtoState{savedAs = fn, editMode = False, ..}
                --put ProtoState{editMode = False}
-               pcmain context state_var
-    "s" -> do state@ProtoState{..} <- get
-              --let fn = savedAs state
-              case (savedAs) of
-                "" -> do
-                  fn <- liftIO $ savePrompt
-                  saveStateAs fn
-                  --put startState
-                  --put ProtoState{savedAs = sa, ..}
-                _ -> do
-                  liftIO $ do
-                    BS.writeFile savedAs (BS.concat $ LBS.toChunks
-                                          (encode state))
-                    
-                    putStrLn $ "Saved: " ++ savedAs
-                  put ProtoState{editMode = False, ..}
-              pcmain context state_var
-                
-    "l" -> do newState <- liftIO loadState
-              put newState
-              pcmain context state_var
-    "e" -> do state@ProtoState{..} <- get
-              case editMode of
-                True -> do
-                  liftIO $ putStrLn "Turning editMode OFF"
-                  put ProtoState{editMode = not editMode, ..}
-                False -> do
-                  liftIO $ putStrLn "Turning editMode ON"
-                  put ProtoState{editMode = not editMode, ..}
-              pcmain context state_var
+               --pcmain context state_var
 
-    "rm" -> do
+      | x == saveCmd -> do
+      ProtoState{..} <- get
+              --let fn = savedAs state
+      case (savedAs) of
+        "" -> do
+          fn <- liftIO $ savePrompt
+          saveStateAs fn
+        _ -> do
+          liftIO $ do
+            let new = ProtoState{editMode = False,..}
+            BS.writeFile savedAs (BS.concat $ LBS.toChunks (encode new))
+            putStrLn $ "Saved: " ++ savedAs
+          --put ProtoState{editMode = False, ..}
+
+      
+      
+      | x == loadCmd -> do
+      newState <- liftIO loadState
+      put newState
+      displayAndLoop' context state_var
+
+      | x == editModeCmd -> do 
+      state@ProtoState{..} <- get
+      let s = case editMode of True -> "OFF"
+                               False -> "ON"
+      liftIO $ putStrLn $ "Turning editMode " ++ s
+      put ProtoState{editMode = not editMode, ..}
+
+      | x == removeMCmd -> do
       state@ProtoState{..} <- get
       liftIO $ putStrLn "Enter message number to remove: "
       num <- liftIO readInt
@@ -173,9 +310,7 @@ pcmain context state_var = do
           pruneOutboxes
           liftIO $ putStrLn $ "Removed message" ++ (show num)
 
-      pcmain context state_var
-
-    "rp" -> do
+      | x == removePCmd ->do
       state@ProtoState{..} <- get
       liftIO $ putStrLn "Enter principal number to remove: "
       num <- liftIO readInt
@@ -186,85 +321,59 @@ pcmain context state_var = do
           removePrincipalAt num
           liftIO $ putStrLn $ "Removed principal" ++ (show num)
 
-      pcmain context state_var
-
-    "c" -> do
-      liftIO $ putStrLn "Are you sure you want to clear?(y/n): "
-      yn <- liftIO getChar
-      case yn of
+      | x == clearCmd -> do
+      liftIO $ putStr "Are you sure you want to clear?(y/n): "
+      yn <- liftIO getLine
+      case (head yn) of
         'y' -> do
           put startState
           liftIO $ putStrLn "Cleared"
         'n' -> return ()
+        _ -> do
+          liftIO $ putStrLn "Did not enter y or n"
+          return ()
+      liftIO $ hFlush stdout
 
-
-      pcmain context state_var
-
-    "m" -> do
+      | x == mSliderCmd -> do
       liftIO $ flush context
       mEventLoop context state_var
-      pcmain context state_var
 
-    "p" -> do
+      | x == pSliderCmd -> do
       liftIO $ flush context
       pEventLoop context state_var
-      pcmain context state_var
 
-
-    "rmi" -> do
+      | x == mIndResetSliderCmd-> do
       liftIO $ putStrLn "Enter message number to reset: " 
       mid <- liftIO $ readInt
       ProtoState {..} <- get
       put ProtoState {mSliderIndividuals = insert mid 0 mSliderIndividuals, ..}
-      pcmain context state_var
 
-    "rpi" -> do
+      | x == pIndResetSliderCmd -> do
       liftIO $ putStrLn "Enter principal number to reset: " 
-      pid <- liftIO $ readInt
-      ps <- getPrincipals
-      let list = toList ps
-          maybeP = find (remPred pid)  list
-          name = case maybeP of
-            Nothing -> "aa"
-            Just (n, _) -> n 
-
+      col <- liftIO $ readInt
+      name <- colToName col
       ProtoState {..} <- get
       put ProtoState {pSliderIndividuals = insert name 0 pSliderIndividuals, ..}
-      pcmain context state_var
-     where
-        remPred :: Pos -> (Name,Principal) -> Bool
-        remPred cIn (_, Principal col' _) = cIn == col'
-       
-    "mi" -> do
+
+      | x == mIndSliderCmd -> do
       liftIO $ flush context
       liftIO $ putStrLn "Enter message number: " 
       mid <- liftIO $ readInt
       mEventLoop' context state_var mid
-      pcmain context state_var
-
     
-    "pi" -> do
+      | x == pIndSliderCmd -> do
       liftIO $ flush context
       liftIO $ putStrLn "Enter principal number: " 
-      pid <- liftIO $ readInt
-      ps <- getPrincipals
-      let list = toList ps
-          maybeP = find (remPred pid)  list
-          name = case maybeP of
-            Nothing -> "aa"
-            Just (n, _) -> n 
-
+      col <- liftIO $ readInt
+      name <- colToName col
       pEventLoop' context state_var name
-      pcmain context state_var
 
-     where
-       remPred :: Pos -> (Name,Principal) -> Bool
-       remPred cIn (_, Principal col' _) = cIn == col'
-      
-      
-      
-    _ -> do liftIO $ putStrLn "Unknown command.  Please retry: " 
-            pcmain context state_var
+      | otherwise -> do
+      liftIO $ putStrLn "Unknown command. Please retry: " 
+
+
+  let undoRedoBool = cmd `elem` [undoCmd, redoCmd, saveCmd, saveAsCmd, loadCmd]
+  displayAndLoop context stateBefore state_var undoRedoBool (undoList, redoList)
 
 
 mEventLoop :: DeviceContext -> TVar ProtoState -> Proto ()
@@ -404,7 +513,7 @@ customDraw context state@ProtoState{..}= do
            start = (xStart, ry+rectH)
            end = (xStart, (h - tborder))
        --drawLine (MoveTo start) end vLineSize vLineColor
-       drawDashes (MoveTo start) end (vLineSize) (pack "black")
+       drawDashes (MoveTo start) end (vLineSize - 1) (pack "black")
 
        let editColCoor = ((fst start) + rectW/6, (snd start) + rectH/1.5)
 
@@ -490,9 +599,9 @@ customDraw context state@ProtoState{..}= do
                                      arrowSize arrowDir
                
            let adjust = case arrowDir of
-                 Main.Right -> 0
-                 Main.Left -> hSpace*2
-               hCenter = startX + (hSpace) - adjust
+                 Main.Right -> 1
+                 Main.Left -> (-1)
+           let hCenter = startX + (adjust * abs(delta) * hSpace)
                messages = elems mMap
                nMes = length messages
                contents''' = map ProtoState.contents messages
@@ -524,7 +633,7 @@ customDraw context state@ProtoState{..}= do
                fontSize = mSlider + sliderI +
                           (((vSpace* (0.8)) * (diff + (dMax*val))) / (dMax * dMax))
                xPos = hCenter --startX + (hSpace / 2)
-               yPos = startY --startY + (vSpace / 2)
+               yPos = startY - (vSpace * (0.05)) --startY + (vSpace / 2)
 
 
            
@@ -664,7 +773,7 @@ drawDashes maybeMove (dx,dy) strokeSize strokeColor = do
       MoveTo _ -> moveTo (mx,my)
       Stay -> return ()
     
-    let dashPartition = 100
+    let dashPartition = 200
         lineLen = dy - my
         frac = lineLen / dashPartition / 6
         incrs = [0..(dashPartition)]

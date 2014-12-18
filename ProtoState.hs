@@ -113,7 +113,9 @@ data ProtoState = ProtoState
              , mSlider    :: Double
              , pSlider    :: Double
              , mSliderIndividuals :: Map MessageId Double
-             , pSliderIndividuals :: Map Name Double 
+             , pSliderIndividuals :: Map Name Double
+             --, undoList  :: [ProtoState]
+             --, redoList  :: [ProtoState]
              } deriving (Eq, Show)
 
 instance B.Binary ProtoState where
@@ -130,6 +132,8 @@ instance B.Binary ProtoState where
     B.put j
     B.put k
     B.put l
+    --B.put m
+   -- B.put n
   get = do
     a <- B.get
     b <- B.get
@@ -143,10 +147,15 @@ instance B.Binary ProtoState where
     j <- B.get
     k <- B.get
     l <- B.get
+    --m <- B.get
+    --n <- B.get
     return $ ProtoState a b c d e f g h i j k l
 
+startState' :: ProtoState
+startState' = ProtoState empty empty 0 0 0 [] False "" 0 0 empty empty --[] []
+
 startState :: ProtoState
-startState = ProtoState empty empty 0 0 0 [] False "" 0 0 empty empty
+startState = ProtoState empty empty 0 0 0 [] False "" 0 0 empty empty --[] []
 
 type Proto = StateT ProtoState IO
 data MaybeAfter = End
@@ -650,11 +659,11 @@ saveStateAs fn = do
         'n' -> return ()
     False -> do
       ProtoState{..} <- get
-      put ProtoState{savedAs = file, ..}
-      state <- get
-      liftIO $ BS.writeFile file (BS.concat $ LBS.toChunks (B.encode state))
+      let new = ProtoState{savedAs = file,editMode = False,..}
+      --state <- get
+      liftIO $ BS.writeFile file (BS.concat $ LBS.toChunks (B.encode new))
       liftIO $ putStrLn $ "Saved to: " ++ file
-      --return file
+      put ProtoState{savedAs = file,..}
 
   return ()
 

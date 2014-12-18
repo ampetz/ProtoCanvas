@@ -1,0 +1,13 @@
+A,B: {d, Na, pm}
+B,TPM: {make_and_load_identity}
+TPM,B: {AIK, AIKh}
+B,CA: {B, AIK}
+CA,B: {enc(K, #AIK)(EK), enc(cert)(K)}
+B,TPM: {act_id(AIKh, #AIK)}
+TPM,B: {K}
+B,M: {d}
+M,B: {e}
+B,TPM: {quote(AIKh, pm, exdata)}
+TPM,B: {pc, sign(#pc, exdata)(AIK)}
+B,A: {e, Na, pc, cert}
+B,A: {sign(#pc, exdata)(AIK)}

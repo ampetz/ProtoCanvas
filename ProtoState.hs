@@ -80,6 +80,36 @@ instance B.Binary Principal where
 -- TODO: add messageIndex :: Map MessageId Slot
 --       AND change Outbox to:  type Outbox = [MessageId] where MessageId = Int
 
+changeName :: Name -> Name -> Proto ()
+changeName nameIn newName = do
+  ProtoState{..} <- get
+  let maybeP = lookup nameIn pMap
+  case maybeP of
+    Nothing -> return ()
+    Just (Principal col ob) -> do
+      let newPmap' = M.delete nameIn pMap
+          newPmap = M.insert newName (Principal col ob) newPmap'
+      setPMap newPmap
+  ms <- getMessages
+  let mList = toList ms
+  newMlist <- mapM (changePMessages nameIn newName) mList
+  let newMmap = fromList newMlist
+  setMMap newMmap
+
+changePMessages :: Name -> Name -> (MessageId,Message) -> Proto (MessageId,Message)
+changePMessages nameIn newName (mid, m) = do
+  ms <- getMessages
+  case M.lookup mid ms of
+    Nothing -> return (0,Message 0 (Action ""))
+    Just (Message row contents) -> do
+      case contents of
+        Action _ -> return (0, Message 0 (Action ""))
+        Send mt t -> do
+          let newNameX = case t == nameIn of
+                True -> newName
+                False -> t
+          return (mid, Message row (Send mt newNameX))
+
 
 setMSlider :: Double -> Proto ()
 setMSlider sizeIn = do

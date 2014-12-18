@@ -23,8 +23,9 @@ import System.IO
 import ProtoState
 import ParseFile
 import qualified Adul as A
-import qualified ISpi as I
+import qualified ISpi2 as I
 import qualified AdulBuffer as AB
+import qualified SpiExamples as SE
 
 type ProtoViewer = ReaderT ViewerParams Canvas
 data ViewerParams = ViewerParams
@@ -34,6 +35,25 @@ data ViewerParams = ViewerParams
                     , vSpace :: Double  
                     } deriving ()
 
+
+{-getMessagesFor :: Name -> Proto [MessageD]
+getMessagesFor name = do
+  ProtoState{..} <- get
+  
+  let maybeP = lookup name pMap
+      case maybeP of
+        Nothing -> return []
+        Just (Principal c ob) -> return []
+
+ where messageUp :: Name -> MessageId -> Proto MessageD
+       messageUp name mid = undefined {-do
+         ProtoState{..} <- get -} -}
+         
+
+addZoomed :: [Name] -> [MessageD] -> Proto ()
+addZoomed newPNames mds = do
+  addPrincipalsAt 1 newPNames
+  addMessagesAt 1 mds
 
 colToName :: Pos -> Proto Name
 colToName pos = do
@@ -112,6 +132,7 @@ mIndResetSliderCmd = "rmi"
 pIndResetSliderCmd = "rpi"
 undoCmd = "u"
 redoCmd = "r"
+changePNameCmd = "cn"
 
 
 displayAndLoop' :: DeviceContext -> TVar ProtoState -> Proto ()
@@ -182,7 +203,8 @@ commands = map f xs
            (mIndResetSliderCmd, "Reset Individual Message size slider"), 
            (pIndResetSliderCmd, "Individual Principal size slider"),
            (undoCmd, "Undo the previous change"),
-           (redoCmd, "Redo the previous undo")
+           (redoCmd, "Redo the previous undo"),
+           (changePNameCmd, "Change p name")
            ]
            
   
@@ -198,6 +220,18 @@ pcmain context state_var (undoList, redoList) = do
   case cmd of
     x | x == "" -> do pcmain context state_var (undoList, redoList)
 
+    x | x == changePNameCmd -> do
+      liftIO $ putStrLn "Enter principal number: " 
+      col <- liftIO $ readInt
+      name <- colToName col
+
+      liftIO $ putStrLn "Enter new name: "
+      newName <- liftIO getLine
+
+      changeName name newName
+      
+
+      return ()
     x | x == undoCmd -> do
       case null undoList of
         True -> do
@@ -239,8 +273,9 @@ pcmain context state_var (undoList, redoList) = do
      -- runForOutput :: PiProcess ->IO (Either String Result )
 
       --let eitherResult :: Either String I.Result
-      liftIO $ putStrLn $ "\nProtocol: " ++ (show A.inst_m2_shared) ++ "\n"
-      eitherResult <- liftIO $ I.runForOutput A.inst_m2_shared
+      let abc = SE.inst_armored --A.inst_m2_shared
+      liftIO $ putStrLn $ "\nProtocol: " ++ (show abc) ++ "\n"
+      eitherResult <- liftIO $ I.runForOutput abc
       case eitherResult of
         Prelude.Left s -> liftIO $ putStrLn s
         Prelude.Right (I.Result f g p) -> do

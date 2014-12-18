@@ -1,1 +1,1 @@
-A,C: {d, Na, pm}
+A,B: test

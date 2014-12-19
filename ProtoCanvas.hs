@@ -36,77 +36,6 @@ data ViewerParams = ViewerParams
                     } deriving ()
 
 
-filterMs :: [Name] -> [MessageD] -> [MessageD]
-filterMs ns mdsIn = Prelude.filter (f ns) mdsIn
-
- where f :: [Name] -> MessageD -> Bool
-       f ns (MessageD fr t m) = and [fr `elem` ns, t `elem` ns]
-
-getMessagesFor :: Name -> Proto [(Pos,MessageD)]
-getMessagesFor name = do
-  ProtoState{..} <- get
-
-  let maybeP = lookup name pMap
-  case maybeP of
-    Nothing -> return []
-    Just (Principal c ob) -> do
-      result' <- mapM (messageUp name) ob
-      
-      return $ result'
-
-      
-changeEditMode :: Bool -> Proto ()
-changeEditMode b = do
-  ProtoState{..} <- get
-  put ProtoState{editMode = b, ..}
-  
-  
-messageUp :: Name -> MessageId -> Proto (Pos, MessageD)
-messageUp name mid = do
-  let def = (0,MessageD "" "" "")
-            
-  ms <- getMessages
-  let message = case lookup mid ms of
-        Nothing -> def
-        Just (Message row contents) -> case contents of
-          Send mt t -> (row, MessageD name t mt)
-          _ -> def
-         
-  return $ message
-         
-
-addZoomed :: [Name] -> [MessageD] -> Proto ()
-addZoomed newPNames mds = do
-  put startState
-  addPrincipalsAt 1 newPNames
-  addMessagesAt 1 mds
-
-colToName :: Pos -> Proto Name
-colToName pos = do
-  ps <- getPrincipals
-  let list = toList ps
-      maybeP = find (remPred pos)  list
-      name = case maybeP of
-        Nothing -> ""
-        Just (n, _) -> n
-  return name
- where
-   remPred :: Pos -> (Name,Principal) -> Bool
-   remPred cIn (_, Principal col' _) = cIn == col'
-          
-
-linePrompt :: String -> IO FilePath
-linePrompt s = do
-  putStr s
-  --hFlush stdout
-  command' <- getLine
-  let command = Prelude.takeWhile (not . isSpace) command'
-  return command
-
-commandPrompt = linePrompt "Enter command(h for list of commands): "
---savePrompt = prompt "Enter name of file to save to: "
-
-
 main = do
   state_var <- atomically $ newTVar startState
   let kp = pack "keypress"
@@ -117,7 +46,6 @@ main = do
       --killThread viewerThread
       return ()
   
-
 
 viewer :: DeviceContext -> TVar ProtoState -> IO () --Reader Canvas ()
 viewer context state_var = do
@@ -131,36 +59,6 @@ viewer context state_var = do
     state' <- readTVar state_var
     if state' == state then retry else return ()
   viewer context state_var
-
-
-data Cmd = Cmd {cmd :: String, descr :: String}
-
-helpCmd :: String
-helpCmd = "h"
-addMCmd :: String
-addMCmd = "add"
-spiCmd = "spi"
-displayCmd = "d"
-quitCmd = "q"
-addFileCmd = "a"
-saveCmd = "s"
-saveAsCmd = "sa"
-loadCmd = "l"
-editModeCmd = "e"
-removeMCmd = "rm"
-removePCmd = "rp"
-clearCmd = "c"
-mSliderCmd = "m"
-pSliderCmd = "p"
-pIndSliderCmd = "pi"
-mIndSliderCmd = "mi"
-mIndResetSliderCmd = "rmi"
-pIndResetSliderCmd = "rpi"
-undoCmd = "u"
-redoCmd = "r"
-changePNameCmd = "cn"
-zoomCmd = "z"
-loadFileCmd = "aa"
 
 
 displayAndLoop' :: DeviceContext -> TVar ProtoState -> Proto ()
@@ -203,46 +101,8 @@ helpCmdDisplay = do
        f :: Int -> Cmd -> IO ()
        f i (Cmd c d) = let extra = (i - length c) in
          putStrLn $ c ++ (replicate (i+extra) ' ') ++ "-" ++ d
-
-
-commands :: [Cmd]
-commands = map f xs
- where f :: (String,String) -> Cmd
-       f (s,d) = Cmd s d
-
-       xs =
-         [
-           {-(helpCmd, "Help"),-}
-           (addMCmd, "Add a message"),
-           (spiCmd, "Run spi"), 
-           {-(quitCmd, "Quit"),-}
-           (addFileCmd, "Add from testFile.txt"),
-           {-(saveCmd, "Save"),
-           (saveAsCmd, "Save As"),-} 
-           (loadCmd, "Load"), 
-           (editModeCmd, "Turn edit mode on/off"), 
-           (removeMCmd, "Remove a message"), 
-           (removePCmd, "Remove a principal"), 
-           (clearCmd, "Clear"), 
-           (mSliderCmd, "Overall Message size slider"), 
-           (pSliderCmd, "Overall Principal size slider"), 
-           (pIndSliderCmd, "Individual Principal size slider"), 
-           (mIndSliderCmd, "Individual Message size slider"), 
-           (mIndResetSliderCmd, "Reset Individual Message size slider"), 
-           (pIndResetSliderCmd, "Individual Principal size slider"),
-           (undoCmd, "Undo the previous change"),
-           (redoCmd, "Redo the previous undo"),
-           (changePNameCmd, "Change p name"),
-           (zoomCmd, "zoom to principals"),
-           (displayCmd, "Append from file"),
-           (loadFileCmd, "Load from a file")
-           ]
-
-sortX :: (Pos, MessageD) -> (Pos, MessageD) -> Ordering
-sortX (x,_) (y,_) = compare x y
   
 
---TODO make list of keywords:  ["save", "add",...] and make sure the user doesn't create a file of the same name as one of them.  OR do commands:  add filename, save filename, etc.
 pcmain :: DeviceContext -> TVar ProtoState -> ([ProtoState],[ProtoState])
           -> Proto ()
 pcmain context state_var (undoList, redoList) = do
@@ -491,108 +351,6 @@ pcmain context state_var (undoList, redoList) = do
   let undoRedoBool = cmd `elem` [undoCmd, redoCmd, saveCmd, saveAsCmd, loadCmd, editModeCmd]
   displayAndLoop context stateBefore state_var undoRedoBool (undoList, redoList)
 
-
-mEventLoop :: DeviceContext -> TVar ProtoState -> Proto ()
-mEventLoop context state_var = do
-  event <- liftIO $ wait context
-  --liftIO $ print event
-  case eWhich event of
-        Nothing -> do liftIO $ putStrLn "DONT THINK I SHOULD GET HERE!!!"
-                      mEventLoop context state_var
-        Just x -> do
-          case x of
-            13 -> return ()
-            _ -> do
-              let adjust = case x of
-                    38 -> 1
-                    40 -> (-1)
-                    _ -> 0
-              ProtoState{..} <- get
-              setMSlider (mSlider + adjust)
-              state <- get
-              --liftIO $ print state
-              liftIO $ atomically $
-                writeTVar state_var state
-              mEventLoop context state_var
-              
-pEventLoop :: DeviceContext -> TVar ProtoState -> Proto ()
-pEventLoop context state_var = do
-  event <- liftIO $ wait context
-  --liftIO $ print event
-  case eWhich event of
-        Nothing -> do liftIO $ putStrLn "DONT THINK I SHOULD GET HERE!!!"
-                      pEventLoop context state_var
-        Just x -> do
-          case x of
-            13 -> return ()
-            _ -> do
-              let adjust = case x of
-                    38 -> 1
-                    40 -> (-1)
-                    _ -> 0
-              ProtoState{..} <- get
-              setPSlider (pSlider + adjust)
-              state <- get
-              --liftIO $ print state
-              liftIO $ atomically $
-                writeTVar state_var state
-              pEventLoop context state_var
-
-mEventLoop' :: DeviceContext -> TVar ProtoState -> MessageId -> Proto ()
-mEventLoop' context state_var mid = do
-  event <- liftIO $ wait context
-  --liftIO $ print event
-  case eWhich event of
-        Nothing -> do liftIO $ putStrLn "DONT THINK I SHOULD GET HERE!!!"
-                      mEventLoop' context state_var mid
-        Just x -> do
-          case x of
-            13 -> return ()
-            _ -> do
-              let adjust = case x of
-                    38 -> 1
-                    40 -> (-1)
-                    _ -> 0
-              ProtoState{..} <- get
-              let maybeSliderI = lookup mid  mSliderIndividuals
-                  sliderI = case maybeSliderI of
-                    Nothing -> 0
-                    Just x -> x
-              setMSlider' mid (sliderI + adjust)
-              state <- get
-              --liftIO $ print state
-              liftIO $ atomically $
-                writeTVar state_var state
-              mEventLoop' context state_var mid
-
-pEventLoop' :: DeviceContext -> TVar ProtoState -> Name -> Proto ()
-pEventLoop' context state_var n = do
-  event <- liftIO $ wait context
-  --liftIO $ print event
-  case eWhich event of
-        Nothing -> do liftIO $ putStrLn "DONT THINK I SHOULD GET HERE!!!"
-                      pEventLoop' context state_var n
-        Just x -> do
-          case x of
-            13 -> return ()
-            _ -> do
-              let adjust = case x of
-                    38 -> 1
-                    40 -> (-1)
-                    _ -> 0
-              ProtoState{..} <- get
-              let maybeSliderI = lookup n pSliderIndividuals
-                  sliderI = case maybeSliderI of
-                    Nothing -> 0
-                    Just x -> x
-              setPSlider' n (sliderI + adjust)
-              state <- get
-              --liftIO $ print state
-              liftIO $ atomically $
-                writeTVar state_var state
-              pEventLoop' context state_var n
-          
-          
 
 customDraw :: DeviceContext -> ProtoState -> Canvas ()
 customDraw context state@ProtoState{..}= do
@@ -922,6 +680,244 @@ drawLine maybeMove (dx,dy) strokeSize strokeColor = do
     closePath()
 
 data Direction = Left | Right
+
+filterMs :: [Name] -> [MessageD] -> [MessageD]
+filterMs ns mdsIn = Prelude.filter (f ns) mdsIn
+
+ where f :: [Name] -> MessageD -> Bool
+       f ns (MessageD fr t m) = and [fr `elem` ns, t `elem` ns]
+
+getMessagesFor :: Name -> Proto [(Pos,MessageD)]
+getMessagesFor name = do
+  ProtoState{..} <- get
+
+  let maybeP = lookup name pMap
+  case maybeP of
+    Nothing -> return []
+    Just (Principal c ob) -> do
+      result' <- mapM (messageUp name) ob
+      
+      return $ result'
+
+      
+changeEditMode :: Bool -> Proto ()
+changeEditMode b = do
+  ProtoState{..} <- get
+  put ProtoState{editMode = b, ..}
+  
+  
+messageUp :: Name -> MessageId -> Proto (Pos, MessageD)
+messageUp name mid = do
+  let def = (0,MessageD "" "" "")
+            
+  ms <- getMessages
+  let message = case lookup mid ms of
+        Nothing -> def
+        Just (Message row contents) -> case contents of
+          Send mt t -> (row, MessageD name t mt)
+          _ -> def
+         
+  return $ message
+         
+
+addZoomed :: [Name] -> [MessageD] -> Proto ()
+addZoomed newPNames mds = do
+  put startState
+  addPrincipalsAt 1 newPNames
+  addMessagesAt 1 mds
+
+colToName :: Pos -> Proto Name
+colToName pos = do
+  ps <- getPrincipals
+  let list = toList ps
+      maybeP = find (remPred pos)  list
+      name = case maybeP of
+        Nothing -> ""
+        Just (n, _) -> n
+  return name
+ where
+   remPred :: Pos -> (Name,Principal) -> Bool
+   remPred cIn (_, Principal col' _) = cIn == col'
+
+mEventLoop :: DeviceContext -> TVar ProtoState -> Proto ()
+mEventLoop context state_var = do
+  event <- liftIO $ wait context
+  --liftIO $ print event
+  case eWhich event of
+        Nothing -> do liftIO $ putStrLn "DONT THINK I SHOULD GET HERE!!!"
+                      mEventLoop context state_var
+        Just x -> do
+          case x of
+            13 -> return ()
+            _ -> do
+              let adjust = case x of
+                    38 -> 1
+                    40 -> (-1)
+                    _ -> 0
+              ProtoState{..} <- get
+              setMSlider (mSlider + adjust)
+              state <- get
+              --liftIO $ print state
+              liftIO $ atomically $
+                writeTVar state_var state
+              mEventLoop context state_var
+              
+pEventLoop :: DeviceContext -> TVar ProtoState -> Proto ()
+pEventLoop context state_var = do
+  event <- liftIO $ wait context
+  --liftIO $ print event
+  case eWhich event of
+        Nothing -> do liftIO $ putStrLn "DONT THINK I SHOULD GET HERE!!!"
+                      pEventLoop context state_var
+        Just x -> do
+          case x of
+            13 -> return ()
+            _ -> do
+              let adjust = case x of
+                    38 -> 1
+                    40 -> (-1)
+                    _ -> 0
+              ProtoState{..} <- get
+              setPSlider (pSlider + adjust)
+              state <- get
+              --liftIO $ print state
+              liftIO $ atomically $
+                writeTVar state_var state
+              pEventLoop context state_var
+
+mEventLoop' :: DeviceContext -> TVar ProtoState -> MessageId -> Proto ()
+mEventLoop' context state_var mid = do
+  event <- liftIO $ wait context
+  --liftIO $ print event
+  case eWhich event of
+        Nothing -> do liftIO $ putStrLn "DONT THINK I SHOULD GET HERE!!!"
+                      mEventLoop' context state_var mid
+        Just x -> do
+          case x of
+            13 -> return ()
+            _ -> do
+              let adjust = case x of
+                    38 -> 1
+                    40 -> (-1)
+                    _ -> 0
+              ProtoState{..} <- get
+              let maybeSliderI = lookup mid  mSliderIndividuals
+                  sliderI = case maybeSliderI of
+                    Nothing -> 0
+                    Just x -> x
+              setMSlider' mid (sliderI + adjust)
+              state <- get
+              --liftIO $ print state
+              liftIO $ atomically $
+                writeTVar state_var state
+              mEventLoop' context state_var mid
+
+pEventLoop' :: DeviceContext -> TVar ProtoState -> Name -> Proto ()
+pEventLoop' context state_var n = do
+  event <- liftIO $ wait context
+  --liftIO $ print event
+  case eWhich event of
+        Nothing -> do liftIO $ putStrLn "DONT THINK I SHOULD GET HERE!!!"
+                      pEventLoop' context state_var n
+        Just x -> do
+          case x of
+            13 -> return ()
+            _ -> do
+              let adjust = case x of
+                    38 -> 1
+                    40 -> (-1)
+                    _ -> 0
+              ProtoState{..} <- get
+              let maybeSliderI = lookup n pSliderIndividuals
+                  sliderI = case maybeSliderI of
+                    Nothing -> 0
+                    Just x -> x
+              setPSlider' n (sliderI + adjust)
+              state <- get
+              --liftIO $ print state
+              liftIO $ atomically $
+                writeTVar state_var state
+              pEventLoop' context state_var n
+
+sortX :: (Pos, MessageD) -> (Pos, MessageD) -> Ordering
+sortX (x,_) (y,_) = compare x y
+
+linePrompt :: String -> IO FilePath
+linePrompt s = do
+  putStr s
+  --hFlush stdout
+  command' <- getLine
+  let command = Prelude.takeWhile (not . isSpace) command'
+  return command
+
+commandPrompt = linePrompt "Enter command(h for list of commands): "
+--savePrompt = prompt "Enter name of file to save to: "
+
+data Cmd = Cmd {cmd :: String, descr :: String}
+
+
+
+commands :: [Cmd]
+commands = map f xs
+ where f :: (String,String) -> Cmd
+       f (s,d) = Cmd s d
+
+       xs =
+         [
+           {-(helpCmd, "Help"),-}
+           (addMCmd, "Add a message"),
+           (spiCmd, "Run spi"), 
+           {-(quitCmd, "Quit"),-}
+           (addFileCmd, "Add from testFile.txt"),
+           {-(saveCmd, "Save"),
+           (saveAsCmd, "Save As"),-} 
+           (loadCmd, "Load"), 
+           (editModeCmd, "Turn edit mode on/off"), 
+           (removeMCmd, "Remove a message"), 
+           (removePCmd, "Remove a principal"), 
+           (clearCmd, "Clear"), 
+           (mSliderCmd, "Overall Message size slider"), 
+           (pSliderCmd, "Overall Principal size slider"), 
+           (pIndSliderCmd, "Individual Principal size slider"), 
+           (mIndSliderCmd, "Individual Message size slider"), 
+           (mIndResetSliderCmd, "Reset Individual Message size slider"), 
+           (pIndResetSliderCmd, "Individual Principal size slider"),
+           (undoCmd, "Undo the previous change"),
+           (redoCmd, "Redo the previous undo"),
+           (changePNameCmd, "Change p name"),
+           (zoomCmd, "zoom to principals"),
+           (displayCmd, "Append from file"),
+           (loadFileCmd, "Load from a file")
+           ]
+
+helpCmd :: String
+helpCmd = "h"
+addMCmd :: String
+addMCmd = "add"
+spiCmd = "spi"
+displayCmd = "d"
+quitCmd = "q"
+addFileCmd = "a"
+saveCmd = "s"
+saveAsCmd = "sa"
+loadCmd = "l"
+editModeCmd = "e"
+removeMCmd = "rm"
+removePCmd = "rp"
+clearCmd = "c"
+mSliderCmd = "m"
+pSliderCmd = "p"
+pIndSliderCmd = "pi"
+mIndSliderCmd = "mi"
+mIndResetSliderCmd = "rmi"
+pIndResetSliderCmd = "rpi"
+undoCmd = "u"
+redoCmd = "r"
+changePNameCmd = "cn"
+zoomCmd = "z"
+loadFileCmd = "aa"
+
+
 
 {-
 drawLineAndArrow :: Start -> End -> Double -> Color ->

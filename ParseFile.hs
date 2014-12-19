@@ -10,29 +10,11 @@ data MessageD = MessageD
                 , to      :: String
                 , message :: String
                 } deriving (Show)
-{-
-main = do
-  ls <- readFileLines file
-  let ms = parseLines ls
-  mapM_ (putStrLn . show) ms
-  putStrLn $ show (getPrincipals ms)
 
- where file = "testFile.txt"
--}
 
 commaParse :: String -> [Int]
 commaParse s = let xs' = splitOneOf "," s in
   map read xs'
-
-{-
-  where f :: ([Int], String) -> String -> ([Int],String)
-        f (xs,  s =
-          let num' = takeWhile (not . comma) s
-              num = read num' in
-          xs ++ [num]
-
-        comma :: Char -> Bool
-        comma x = x == ',' -}
 
 fromFile :: FilePath -> IO [MessageD]
 fromFile fp = do

@@ -1,5 +1,13 @@
-A,B: test
+A,B: A to B
 B,C: B to C
-C,A: C to A
-D,F: D to F
-F,A: F to A
+D,E: D to E
+F,G: F to G
+C,D: C to D
+E,F: E to F
+E,B: E to B
+b,a: b
+AA,BB: B
+BB,CC:C
+AA,DD:D
+AA,FF:fasdfasdf
+CC,JJ: C
